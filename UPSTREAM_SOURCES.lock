@@ -1,0 +1,21 @@
+# Upstream Sources Lock
+
+Generated: 2026-05-03 16:10:21 UTC
+Script: scripts/sync_sources.sh
+
+| Source | URL | Branch | Commit |
+| --- | --- | --- | --- |
+| pump_public_docs | https://github.com/pump-fun/pump-public-docs.git | main | 7de0b959fa2bdab379a2f75f5433d3de1e35d229 |
+| meteora_docs | https://github.com/MeteoraAg/docs.git | main | 7ae055cbb23559c15f1c648d49fc1702c801aa37 |
+| meteora_dlmm_sdk | https://github.com/MeteoraAg/dlmm-sdk.git | main | 1ac25be5c41e0de4115adb3845e35a4307d4b5e7 |
+| damm-v1-sdk | https://github.com/MeteoraAg/damm-v1-sdk.git | main | 02c66a3c13ebabdf71eb29d87996aaa7a06a7c29 |
+| meteora_damm_v2 | https://github.com/MeteoraAg/damm-v2.git | main | 58a13fcf45516a9f27f2bd2a2056fb66673454e0 |
+| meteora_damm_v2_sdk | https://github.com/MeteoraAg/damm-v2-sdk.git | main | 1872ee314a0f4f6c47f7d1766da018b2b50dc971 |
+| meteora_dbc | https://github.com/MeteoraAg/dynamic-bonding-curve.git | main | b4f954733f0e88258f1eb3f0eff75e4314c9610c |
+| raydium_docs | https://github.com/raydium-io/raydium-docs.git | master | 5198365aee2506cca0d4e91b0e016a5afc5cc1e2 |
+| raydium_sdk_v2 | https://github.com/raydium-io/raydium-sdk-V2.git | master | 8619a43bba336599b9101c39aeaa27b3f1b88eab |
+| raydium_cp_swap | https://github.com/raydium-io/raydium-cp-swap.git | master | 609780f165d234a0aa9699cac90178a3fa36fd43 |
+| raydium_amm | https://github.com/raydium-io/raydium-amm.git | master | 3b087ade40da365b2dd1df5e8baf77a3b97245d4 |
+| raydium_clmm | https://github.com/raydium-io/raydium-clmm.git | master | a5a46ff5cc768a3075094fb7bd6b1b2a48b34fd3 |
+
+This file is generated. Re-run scripts/sync_sources.sh to refresh.

@@ -1,0 +1,25 @@
+/target
+/artifacts
+/Cobra
+/target_*
+/target-*
+/external/upstreams/
+/.env
+/.env.local
+/.env.*.local
+/.venv-ws
+/.venv-docs
+/docs-site
+/sudoku
+
+
+# Local docker build stamps/cache
+/.cache/
+
+# Local runtime artifacts (may contain secrets / signed tx payloads)
+/artifacts/create/
+/artifacts/logs/
+/artifacts/keypairs/
+
+# Generated public export folder
+/Mamba/

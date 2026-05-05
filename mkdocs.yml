@@ -1,0 +1,82 @@
+site_name: Mamba Docs
+site_description: Solana Rust market kit, local authenticated API, CLI/TUI, and degen-ready workflows
+site_dir: docs-site
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  logo: images/mamba_mark.svg
+  favicon: images/mamba_mark.svg
+  font: false
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.tracking
+    - content.code.copy
+    - content.tabs.link
+    - search.highlight
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Overview:
+      - Home: index.md
+      - Quickstart: quickstart.md
+      - Architecture: architecture.md
+      - Markets: markets.md
+      - Repository Workflow: repository-workflow.md
+  - Apps:
+      - Local API: MAMBA_API.md
+      - MCP Server: MAMBA_MCP.md
+      - MCP Client Setup: MCP_CLIENT_SETUP.md
+      - CLI and TUI: MAMBA_CLI.md
+      - Create Runbook: MAMBA_CREATE.md
+      - Wallet Cleaner: features/wallet-cleaner.md
+  - Reference:
+      - Module Map: reference/module-map.md
+      - Scripts and Artifacts: reference/scripts-and-artifacts.md
+      - Repository Inventory: reference/repository-inventory.md

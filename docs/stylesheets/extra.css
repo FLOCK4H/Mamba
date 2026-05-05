@@ -1,0 +1,180 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap");
+
+:root {
+  --mamba-ink: #0b1220;
+  --mamba-indigo: #14213d;
+  --mamba-sand: #f6f1e8;
+  --mamba-gold: #ffb703;
+  --mamba-orange: #fb8500;
+  --mamba-cyan: #7bdff2;
+  --mamba-slate: #425466;
+}
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #101820;
+  --md-accent-fg-color: #fb8500;
+  --md-default-bg-color: #f7f4ed;
+  --md-typeset-a-color: #b85c00;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #111827;
+  --md-accent-fg-color: #ffb703;
+}
+
+body,
+input,
+button {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  letter-spacing: 0;
+}
+
+.md-typeset h1 {
+  margin-bottom: 0.75rem;
+  font-size: 2.35rem;
+  line-height: 1.05;
+}
+
+.md-typeset code {
+  border-radius: 0.35rem;
+}
+
+.home-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 2.2rem;
+  border-radius: 1.25rem;
+  background:
+    radial-gradient(circle at top left, rgba(123, 223, 242, 0.24), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(255, 183, 3, 0.24), transparent 26%),
+    linear-gradient(135deg, #101820 0%, #14213d 52%, #1f3d53 100%);
+  color: #fdf8ef;
+  box-shadow: 0 24px 72px rgba(11, 18, 32, 0.22);
+}
+
+.home-hero::after {
+  position: absolute;
+  inset: auto -5rem -7rem auto;
+  width: 16rem;
+  height: 16rem;
+  border-radius: 50%;
+  background: rgba(251, 133, 0, 0.12);
+  content: "";
+}
+
+.home-hero h1,
+.home-hero p {
+  position: relative;
+  color: inherit;
+}
+
+.eyebrow {
+  display: inline-flex;
+  margin-bottom: 0.9rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-top: 1.2rem;
+}
+
+.hero-actions .md-button {
+  margin: 0;
+  border-radius: 999px;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0 2rem;
+}
+
+.surface-card {
+  padding: 1.1rem 1rem 0.95rem;
+  border: 1px solid rgba(20, 33, 61, 0.08);
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 247, 231, 0.88));
+  box-shadow: 0 16px 38px rgba(20, 33, 61, 0.08);
+}
+
+.surface-label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--mamba-slate);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.surface-card strong {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--mamba-indigo);
+  font-size: 1.1rem;
+}
+
+.surface-card p {
+  margin: 0;
+  color: #324152;
+}
+
+.screenshot-frame {
+  display: block;
+  margin: 1.25rem 0;
+  padding: 0.65rem;
+  border-radius: 1.1rem;
+  background:
+    linear-gradient(180deg, rgba(255, 183, 3, 0.12), rgba(20, 33, 61, 0.06)),
+    #fff;
+  box-shadow: 0 18px 40px rgba(11, 18, 32, 0.12);
+}
+
+.screenshot-frame img {
+  display: block;
+  width: 100%;
+  border-radius: 0.8rem;
+}
+
+.md-typeset table:not([class]) {
+  border-radius: 0.85rem;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.06);
+}
+
+.md-typeset table:not([class]) th {
+  background: rgba(20, 33, 61, 0.92);
+  color: #fff9ee;
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 0.9rem;
+}
+
+@media screen and (max-width: 76.1875em) {
+  .md-typeset h1 {
+    font-size: 2rem;
+  }
+
+  .home-hero {
+    padding: 1.5rem;
+  }
+}

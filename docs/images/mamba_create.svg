@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1074" height="694" viewBox="0 0 1074 694">
+  <title>Mamba Create</title>
+  <rect x="0" y="0" width="1074" height="694" rx="12" fill="#0b1220"/>
+  <text x="16" y="30" font-size="14" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace" xml:space="preserve">
+    <tspan x="16" dy="0">                                       ● Create  •  devnet  •  spl_token  •  build                                      </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan>
+    <tspan x="16" dy="18"> Token Setup ───────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan>
+    <tspan x="16" dy="18"> Basics                                                                                                                 </tspan>
+    <tspan x="16" dy="18">   network (←/→):                                                                                                       </tspan>
+    <tspan x="16" dy="18">   [devnet]  mainnet                                                                                                    </tspan>
+    <tspan x="16" dy="18"> rpc: https://api.devnet.solana.com                                                                                     </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">   method (←/→):                                                                                                        </tspan>
+    <tspan x="16" dy="18">   pump_fun  [spl_token]  spl_token_2022  raydium_launchpad                                                             </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">   execution (←/→):                                                                                                     </tspan>
+    <tspan x="16" dy="18">   [build]  send                                                                                                        </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18"> Token                                                                                                                  </tspan>
+    <tspan x="16" dy="18"> ▸ name*: Example Token|                                                                                                </tspan>
+    <tspan x="16" dy="18">   symbol*: EXMPL                                                                                                       </tspan>
+    <tspan x="16" dy="18">   decimals*: 6                                                                                                         </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18"> Metadata                                                                                                               </tspan>
+    <tspan x="16" dy="18">   image: artifacts/cli-screenshots/EXAMPLE_image.png                                                                   </tspan>
+    <tspan x="16" dy="18">   uri: auto (IPFS upload)                                                                                              </tspan>
+    <tspan x="16" dy="18"> ipfs: image+metadata upload enabled                                                                                    </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18"> Details                                                                                                                </tspan>
+    <tspan x="16" dy="18">   details (←/→):                                                                                                       </tspan>
+    <tspan x="16" dy="18">   [hide]  show                                                                                                         </tspan>
+    <tspan x="16" dy="18"> details are hidden (still saved)                                                                                       </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">                                                                                                                        </tspan>
+    <tspan x="16" dy="18">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</tspan>
+    <tspan x="16" dy="18">                                                         F1 help                                                        </tspan>
+  </text>
+  <text x="16" y="684" font-size="11" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace">generated from artifacts/cli-screenshots/20260306T170630Z_mamba_create.txt</text>
+</svg>
