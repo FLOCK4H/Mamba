@@ -17,7 +17,7 @@ The current main menu is:
 
 ## Cleaner screen
 
-The cleaner is now part of the main menu rather than a hidden workflow. It previews reclaimable token accounts, shows how much SOL can be recovered, and lets you build or send cleanup batches for selected wallets.
+The cleaner is part of the main menu rather than a hidden workflow. It previews reclaimable token accounts, reports recoverable SOL, and supports build or send cleanup batches for selected wallets.
 
 ![Mamba cleaner](images/mamba_cleaner.svg){ .screenshot-frame }
 
@@ -82,7 +82,7 @@ scripts/snapshot_to_svg.sh artifacts/cli-screenshots/<snapshot>.txt docs/images/
 - `MAMBA_API_HTTP_URLS` / `MAMBA_API_WS_URLS` can be comma-separated same-cluster lists; the TUI and headless flows inherit the API multi-RPC pool end-to-end, and local fallback reads reuse the same HTTP list.
 - Live sends require both a signer and explicit allow flags.
 - `AUTO_ACCEPT_LOW_LQ_POOLS=false` makes Quick Trade require an extra confirmation before live-sending a low-LQ route.
-- Mainnet live sends remain locked unless you intentionally enable them.
+- Mainnet live sends remain locked unless runtime flags enable them.
 
 Mainnet note:
 

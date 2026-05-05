@@ -2,7 +2,7 @@
 
 ## Source-of-truth files
 
-This repository is governed by checked-in process files, not only by code:
+Checked-in process files define the repository workflow:
 
 | File | Purpose |
 | --- | --- |
@@ -24,14 +24,14 @@ This repository is governed by checked-in process files, not only by code:
 ## Runtime safety
 
 - Default behavior is build-only or simulated.
-- Mainnet sends are manual-only unless explicitly unlocked by the user.
+- Mainnet sends are manual-only unless explicitly unlocked in runtime configuration.
 - Devnet live validation is allowed when required, but the cluster must be verified first.
 - Spend-cap checks are not optional.
 - Secrets and private keys must never be committed.
 
 ## UI evidence rule
 
-For user-facing TUI work, the repo requires screenshot or snapshot evidence in `artifacts/`. This documentation pass uses deterministic snapshot output from:
+For TUI-facing work, the repo requires screenshot or snapshot evidence in `artifacts/`. This documentation pass uses deterministic snapshot output from:
 
 ```bash
 cargo run --bin mamba -- --snapshot
@@ -39,4 +39,4 @@ cargo run --bin mamba -- --snapshot
 
 ## Documentation rule
 
-Implementation and validation come first. Documentation is the final step after code changes are validated. This site follows that rule by documenting the runtime, scripts, tracked evidence, and repository inventory after the cleaner feature and snapshot evidence were in place.
+Implementation and validation come first. Documentation is the final step after code changes are validated. This site documents runtime surfaces, scripts, tracked evidence, and repository inventory after implementation work is verified.

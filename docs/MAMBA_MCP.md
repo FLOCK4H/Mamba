@@ -4,7 +4,7 @@
 
 The MCP layer is intended to be self-sufficient. Agents should not need `solana` CLI or any extra host packages for wallet balance checks, metadata lookup, Launchpad config discovery, or transaction planning that the local API already supports.
 
-RPC behavior is owned by `mamba_api`, not by the MCP bridge. Whatever multi-RPC pool you configure for the API is the same pool MCP tools inherit for reads, simulations, wallet routes, create flows, and execute flows.
+RPC behavior is owned by `mamba_api`, not by the MCP bridge. The API-configured multi-RPC pool is inherited by MCP tools for reads, simulations, wallet routes, create flows, and execute flows.
 
 ## Why it exists
 
@@ -45,7 +45,7 @@ export MAMBA_PRIVATE_KEY='<base58-64-byte-keypair-or-json-[u8;64]>'
 cargo run --bin mamba_api
 ```
 
-If you care about mainnet websocket throughput, set `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` before starting the API. Use comma-separated same-cluster lists and prefer at least 3 HTTP RPCs across 2 providers for sustained MCP/API/TUI activity.
+For mainnet websocket throughput, set `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` before starting the API. Use comma-separated same-cluster lists and prefer at least 3 HTTP RPCs across 2 providers for sustained MCP/API/TUI activity.
 
 Build the MCP binary first:
 
@@ -79,16 +79,16 @@ Codex / GUI MCP configuration to use:
 | Environment variables | `MAMBA_MCP_API_URL=http://127.0.0.1:8787/mamba-api/v1` and `MAMBA_MCP_API_KEY=<same value as MAMBA_API_KEY>` |
 | Working directory | Absolute repo root, for example `/absolute/path/to/mamba` |
 
-Your working Codex settings screenshot follows that shape exactly:
+A working Codex GUI configuration has these properties:
 
 - command points straight at the built `mamba_mcp` binary
 - arguments are empty
 - MCP API URL and key are passed explicitly
 - working directory stays at the repository root
 
-Why the binary path should be used for GUI client launch:
+Why the binary path is preferred for GUI client launch:
 
-- GUI MCP launchers are not interactive shells. They may not inherit the same Rust toolchain PATH or `rustup` environment as your terminal.
+- GUI MCP launchers are not interactive shells. They may not inherit the same Rust toolchain PATH or `rustup` environment as the terminal.
 - `cargo run --bin mamba_mcp` adds an extra layer of command parsing and toolchain resolution that the client does not need.
 - Some GUI clients serialize arguments differently from a shell; using the binary with no args removes the most common failure mode completely.
 - Rebuilding after code changes is explicit: run `cargo build --bin mamba_mcp`, then reconnect the client to the same binary path.
@@ -96,7 +96,7 @@ Why the binary path should be used for GUI client launch:
 Codex-specific note:
 
 - The binary path is the preferred configuration even if `cargo run --bin mamba_mcp` works in a manual terminal.
-- If you insist on using Cargo in Codex, each argv entry must be separate:
+- Cargo launch in Codex remains valid only when each argv entry is separate:
   - `run`
   - `--bin`
   - `mamba_mcp`
@@ -127,7 +127,7 @@ export MAMBA_MCP_API_KEY="$MAMBA_API_KEY"
 ./target/debug/mamba_mcp
 ```
 
-If you are actively editing MCP code and want Cargo to rebuild and run it in one shot from a shell, this also works:
+Local shell development can rebuild and run in one command:
 
 ```bash
 export MAMBA_MCP_API_KEY="$MAMBA_API_KEY"

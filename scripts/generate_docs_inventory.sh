@@ -28,14 +28,14 @@ generated_at="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
 {
   echo "# Repository Inventory"
   echo
-  echo "This page is generated from \`git ls-files --cached --others --exclude-standard\` so the published docs reflect the current checkout without local ignored build products, docs output, or secrets."
+  echo "Repository paths indexed from \`git ls-files --cached --others --exclude-standard\`."
   echo
   echo "## Coverage"
   echo
   echo "- Indexed paths: ${indexed_total}"
   echo "- Generated at: ${generated_at}"
   echo "- Inventory source: \`git ls-files --cached --others --exclude-standard\`"
-  echo "- Untracked ignored paths stay out of this page through \`.gitignore\` (for example \`target/\`, \`.venv-docs/\`, \`.env\`, \`docs-site/\`, \`PACKAGING.md\`, and synced \`external/upstreams/\` mirrors)"
+  echo "- Ignored paths excluded through \`.gitignore\` (for example \`target/\`, \`.venv-docs/\`, \`.env\`, \`docs-site/\`, \`PACKAGING.md\`, and synced \`external/upstreams/\` mirrors)"
   echo "- Additional local-only exclusion: \`Capture.PNG\`"
   echo
   echo "## Top-level groups"
@@ -67,7 +67,7 @@ generated_at="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
   echo
   echo "## Path listing"
   echo
-  echo "The sections below expand to the exact indexed paths currently found by the repo scan."
+  echo "The sections below expand to the indexed paths currently present in the checkout."
   echo
 
   for group in "${REPO_GROUPS[@]}"; do

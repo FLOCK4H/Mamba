@@ -1,17 +1,8 @@
 # Mamba
 
-```text
-███╗   ███╗  █████╗  ███╗   ███╗ ██████╗  █████╗
-████╗ ████║ ██╔══██╗ ████╗ ████║ ██╔══██╗██╔══██╗
-██╔████╔██║ ███████║ ██╔████╔██║ ██████╔╝███████║
-██║╚██╔╝██║ ██╔══██║ ██║╚██╔╝██║ ██╔══██╗██╔══██║
-██║ ╚═╝ ██║ ██║  ██║ ██║ ╚═╝ ██║ ██████╔╝██║  ██║
-╚═╝     ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝
-```
+![Mamba icon](docs/images/mamba_icon.png)
 
 Rust-based Solana market kit: multi-market adapters, decoding, routing, a local authenticated API, an MCP server, and a degen-friendly CLI/TUI.
-
-![Mamba menu](docs/images/mamba_menu.svg)
 
 ## What it is
 
@@ -46,9 +37,9 @@ cargo build --bin mamba_mcp
 cargo run --bin mamba --
 ```
 
-The bootstrap scripts read the pinned Rust toolchain from `rust-toolchain.toml`, install host build dependencies, refresh `external/upstreams/` via `scripts/sync_sources.sh`, and finish with `cargo build --locked --bin mamba --bin mamba_api --bin mamba_mcp` unless you pass their skip flags.
+The bootstrap scripts read the pinned Rust toolchain from `rust-toolchain.toml`, install host build dependencies, refresh `external/upstreams/` via `scripts/sync_sources.sh`, and finish with `cargo build --locked --bin mamba --bin mamba_api --bin mamba_mcp` by default.
 
-Run `./scripts/print_mamba_mcp_configs.sh` to generate ready-to-paste MCP client snippets for this checkout. The detailed guides for Codex, Claude Code/Desktop, Gemini CLI, and OpenClaw live in `docs/MCP_CLIENT_SETUP.md`.
+`./scripts/print_mamba_mcp_configs.sh` emits MCP client snippets for the current checkout. Client-specific setup lives in `docs/MCP_CLIENT_SETUP.md`.
 
 ## Platform support
 
@@ -56,7 +47,9 @@ Run `./scripts/print_mamba_mcp_configs.sh` to generate ready-to-paste MCP client
 - macOS: supported through `scripts/install_mamba_macos.sh` plus the normal Cargo workflow.
 - Windows: supported through `scripts/install_mamba_windows.ps1` and PowerShell.
 
-The intended runtime is host-native Rust binaries. This repo is intentionally docker-less, frontend-less, and postgres-less.
+The primary runtime is host-native Rust binaries. Docker and a frontend are not required.
+
+`mamba_api` maintains an in-memory websocket mint cache for live market views. `MAMBA_API_STORE_MODE=true` optionally enables a Postgres-backed API store for `/transactions`, `/creators`, and `/creator-mints`.
 
 ## Required environment
 
@@ -64,7 +57,12 @@ Minimum setup:
 
 - `MAMBA_API_KEY` for authenticated API routes
 - `MAMBA_PRIVATE_KEY` for signed build or execute flows
-- `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` when you want explicit RPC selection
+- `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` for explicit RPC selection
+
+Optional store mode:
+
+- `MAMBA_API_STORE_MODE=true`
+- `MAMBA_API_DATABASE_URL=<postgres connection string>`
 
 `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` accept comma-separated lists. `mamba_api`, `mamba`, and `mamba_mcp` all use that pool end-to-end: read-heavy paths rotate across it automatically and temporarily cool down rate-limited endpoints instead of hammering the same RPC.
 
@@ -95,7 +93,7 @@ export MAMBA_API_ALLOW_PRIVATE_NETWORK_CLIENTS=true
 
 ## Documentation
 
-This repo ships a MkDocs Material docs site sourced from `docs/` plus a generated repository inventory page.
+MkDocs Material site sourced from `docs/` plus a generated repository inventory page.
 
 Local preview:
 
@@ -107,7 +105,7 @@ pip install -r requirements-docs.txt
 mkdocs serve -a 0.0.0.0:8000
 ```
 
-GitHub deploys this same MkDocs site through [`.github/workflows/docs.yml`](.github/workflows/docs.yml) when you push the default branch and enable GitHub Pages with the `GitHub Actions` source.
+GitHub Pages publication is defined in [`.github/workflows/docs.yml`](.github/workflows/docs.yml) and uses the `GitHub Actions` source.
 
 Primary source pages:
 
@@ -154,7 +152,7 @@ Snapshots are written to `artifacts/cli-screenshots/`.
 - Build-first by default. Live execution routes exist, but signing stays inside Mamba through the configured API signer or managed wallet store.
 - Treat `.env` and any private keys as sensitive.
 - Devnet is the expected automated validation cluster.
-- Mainnet execution should stay manual by default unless you intentionally override that policy for a specific session.
+- Mainnet execution stays manual by default unless explicitly unlocked for a session.
 
 ## Devnet validation
 
@@ -170,7 +168,7 @@ cargo run --bin mamba_api
 cargo run --bin mamba -- --pool-suite --http-url https://api.devnet.solana.com
 ```
 
-If the suite asks for cached setup state, run the one-time setup path:
+When the suite asks for cached setup state, run the one-time setup path:
 
 ```bash
 cargo run --bin mamba -- --pool-suite --pool-suite-setup-send --http-url https://api.devnet.solana.com
@@ -196,8 +194,8 @@ cargo run --bin mamba_api
 
 ### Raydium Launchpad create simulation fails with `InvalidInput`
 
-Launchpad supply limits are enforced against the token decimals. If you increase decimals without scaling the raw supply, the program rejects the create request during `InitializeV2`. The pool suite uses `decimals=6` for the Launchpad smoke path because that matches Raydium's documented default and current devnet-compatible presets.
+Launchpad supply limits are enforced against token decimals. Increasing decimals without scaling raw supply causes the program to reject the create request during `InitializeV2`. The pool suite uses `decimals=6` for the Launchpad smoke path because that matches Raydium's documented default and current devnet-compatible presets.
 
 ### Websocket-backed views look empty
 
-Start `mamba_api`, verify `/health`, then leave subscriptions active for at least 15 seconds before judging the stream. The validation harnesses and monitor surfaces are websocket-first and intentionally avoid tight HTTP polling loops.
+Start `mamba_api`, verify `/health`, then leave subscriptions active for at least 15 seconds. The validation harnesses and monitor surfaces are websocket-first and intentionally avoid tight HTTP polling loops.

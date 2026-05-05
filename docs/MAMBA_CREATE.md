@@ -8,26 +8,26 @@ This runbook covers token creation ("Create") flows:
 - optionally let `mamba_api` sign and submit it through `/create/execute`,
 - sign locally via `mamba`,
 - optionally simulate (recommended),
-- optionally **send** (manual-only) via `mamba --create-send` or manual RPC `sendTransaction`.
+- optionally **send** via `mamba --create-send` or manual RPC `sendTransaction`.
 
 ## Safety notes
 
 - `mamba_api` Create flows are **build-first**. `/create/build` never signs, while `/create/execute` can sign and submit only when live sends are intentionally enabled.
 - Headless `mamba --create` is **build-only by default**; it will only broadcast when `--create-send` is passed.
 - In the `mamba` TUI Create screen, set `execution=send` and press `Enter` to broadcast (devnet by default; mainnet send remains locked unless explicitly enabled).
-- Treat any sending steps as **live execution** and only run them when you intend to create a token on-chain.
+- Treat any sending step as **live execution**; use it only for intentional on-chain token creation.
 - Prefer **devnet** for rehearsal; mainnet creation is permanent and costs SOL for rent + fees.
 
 ## Prerequisites
 
 - `mamba_api` running locally (authenticated).
 - `mamba` available (`cargo run --bin mamba -- ...`).
-- A payer keypair you control (recommended: `--create-payer-keypair <path>`).
+- A locally controlled payer keypair (recommended: `--create-payer-keypair <path>`).
 - RPC HTTP URL for the target cluster (send/confirm/verify). If omitted, Mamba defaults to devnet.
 
 ## 1) Start `mamba_api` (local, authenticated)
 
-Example (devnet; safe until you call an execute route):
+Example (devnet; build-only until an execute route is called):
 
 ```bash
 export MAMBA_API_KEY='mamba_test_key'
@@ -46,18 +46,18 @@ List supported Create methods:
 cargo run --bin mamba -- --create-list-methods
 ```
 
-If you plan to use `raydium_launchpad`, you must provide config pubkeys:
+Raydium Launchpad builds require config pubkeys:
 
 ```bash
 cargo run --bin mamba -- --raydium-list-global-configs
 cargo run --bin mamba -- --raydium-list-platform-configs
 ```
 
-If you want API-managed signing instead of CLI signing, you can also use `/create/execute` directly or through `mamba_mcp`. In execute mode, omitting `mint` is allowed and Mamba will generate the mint signer internally, returning only the public key in the response.
+API-managed signing is available through `/create/execute` or `mamba_mcp`. In execute mode, omitting `mint` allows Mamba to generate the mint signer internally and return only the public key in the response.
 
 ## 3) Build + sign a Create transaction (no send)
 
-Use a payer keypair you control (file path is recommended over env vars).
+Preferred payer-keypair form: file path rather than env vars.
 
 Example (`spl_token`), with signed simulation enabled:
 
@@ -81,7 +81,7 @@ Notes:
 
 ### Optional: free IPFS upload (image + metadata)
 
-If you provide `--create-image`, Mamba uploads your image and metadata JSON to IPFS via `https://pump.fun/api/ipfs` (no API key required) and uses the returned `metadataUri` as the on-chain `uri`.
+`--create-image` uploads the image and metadata JSON to IPFS via `https://pump.fun/api/ipfs` (no API key required) and uses the returned `metadataUri` as the on-chain `uri`.
 
 Override the upload endpoint via `--create-ipfs-upload-url` or `MAMBA_IPFS_UPLOAD_URL`.
 
@@ -111,9 +111,9 @@ The bundle contains (when available):
 - live-send/confirm/verify results (if `--create-send` was used),
 - IPFS upload response (if `--create-image` was used).
 
-## 4) Optional live send + confirm + verify (manual-only)
+## 4) Optional live send + confirm + verify
 
-Only do this when you are ready to create the token on the target cluster.
+This path broadcasts against the target cluster.
 
 Recommended: `--create-send` broadcasts the signed transaction, then (by default) confirms and verifies on-chain state.
 

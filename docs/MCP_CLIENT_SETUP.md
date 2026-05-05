@@ -29,7 +29,7 @@ Canonical MCP environment values:
 - `MAMBA_MCP_API_URL=http://127.0.0.1:8787/mamba-api/v1`
 - `MAMBA_MCP_API_KEY=<same value as MAMBA_API_KEY>`
 
-To generate ready-to-paste snippets for the current checkout, run:
+Snippet generator for the current checkout:
 
 ```bash
 ./scripts/print_mamba_mcp_configs.sh
@@ -61,7 +61,7 @@ claude mcp add-json mamba \
   '{"type":"stdio","command":"/absolute/path/to/mamba/target/debug/mamba_mcp","args":[],"env":{"MAMBA_MCP_API_URL":"http://127.0.0.1:8787/mamba-api/v1","MAMBA_MCP_API_KEY":"'"$MAMBA_API_KEY"'"}}'
 ```
 
-If you prefer a project file, use `.mcp.json` with the same `mcpServers.mamba` object.
+Project-file variant: `.mcp.json` with the same `mcpServers.mamba` object.
 
 ## Claude Desktop
 
@@ -121,7 +121,7 @@ openclaw mcp show mamba --json
 
 ## Generic stdio MCP clients
 
-If your client accepts a plain stdio server object, use this shape:
+Clients that accept a plain stdio server object can use this shape:
 
 ```json
 {
@@ -142,4 +142,4 @@ If your client accepts a plain stdio server object, use this shape:
 
 - Use the built binary path, not `cargo run --bin mamba_mcp`, for client integrations.
 - Keep signing in `mamba_api`; the MCP server never returns private keys.
-- The local MCP bridge is stdio-based today. Clients that only support remote MCP should connect to a future hosted surface, not the local binary.
+- The local MCP bridge is stdio-based today. Clients that only support remote MCP require a future hosted surface rather than the local binary.

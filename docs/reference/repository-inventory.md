@@ -1,13 +1,13 @@
 # Repository Inventory
 
-This page is generated from `git ls-files --cached --others --exclude-standard` so the published docs reflect the current checkout without local ignored build products, docs output, or secrets.
+Repository paths indexed from `git ls-files --cached --others --exclude-standard`.
 
 ## Coverage
 
 - Indexed paths: 116
-- Generated at: 2026-04-30 19:03:20 UTC
+- Generated at: 2026-05-05 17:45:00 UTC
 - Inventory source: `git ls-files --cached --others --exclude-standard`
-- Untracked ignored paths stay out of this page through `.gitignore` (for example `target/`, `.venv-docs/`, `.env`, `docs-site/`, `PACKAGING.md`, and synced `external/upstreams/` mirrors)
+- Ignored paths excluded through `.gitignore` (for example `target/`, `.venv-docs/`, `.env`, `docs-site/`, `PACKAGING.md`, and synced `external/upstreams/` mirrors)
 - Additional local-only exclusion: `Capture.PNG`
 
 ## Top-level groups
@@ -24,7 +24,7 @@ This page is generated from `git ls-files --cached --others --exclude-standard` 
 
 ## Path listing
 
-The sections below expand to the exact indexed paths currently found by the repo scan.
+The sections below expand to the indexed paths currently present in the checkout.
 
 ### Repository root
 
@@ -69,7 +69,7 @@ docs/features/wallet-cleaner.md
 docs/images/mamba_cleaner.svg
 docs/images/mamba_create.svg
 docs/images/mamba_loading.svg
-docs/images/mamba_mark.svg
+docs/images/mamba_icon.png
 docs/images/mamba_menu.svg
 docs/images/mamba_monitor.svg
 docs/images/mamba_trade.svg

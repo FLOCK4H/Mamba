@@ -12,7 +12,7 @@
 
 | Path | Purpose |
 | --- | --- |
-| `src/api/mod.rs` | Router composition, auth, docs endpoint, shared state |
+| `src/api/mod.rs` | Router composition, auth, docs endpoint, websocket cache views, optional store-backed endpoints, shared state |
 | `src/api/create.rs` | Create-method discovery and create-builder routes |
 | `src/api/pool.rs` | Pool creation and pool management routes |
 | `src/api/wallet.rs` | Managed wallet list/create/select, transfer builds, cleaner preview/build |

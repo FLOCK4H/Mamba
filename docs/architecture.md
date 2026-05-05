@@ -2,7 +2,7 @@
 
 ## Runtime model
 
-Mamba is one crate with two primary binaries and a set of protocol adapters:
+Mamba is one crate with three user-facing binaries and a set of protocol adapters:
 
 | Surface | Path | Responsibility |
 | --- | --- | --- |
@@ -14,7 +14,7 @@ Mamba is one crate with two primary binaries and a set of protocol adapters:
 
 | Module | Path | Role |
 | --- | --- | --- |
-| API | `src/api/` | Axum routes, auth, docs, wallet/create/pool handlers |
+| API | `src/api/` | Axum routes, auth, docs, websocket cache views, optional store-backed endpoints, wallet/create/pool handlers |
 | Core | `src/core/` | Shared Solana utilities, create/pool/wallet builders, signer helpers, cluster handling |
 | DEX | `src/dex/` | Market-specific integrations and route logic |
 | Handlers | `src/handlers/` | Websocket ingestion and live mint cache plumbing |
@@ -27,7 +27,7 @@ Mamba is one crate with two primary binaries and a set of protocol adapters:
 
 1. `mamba_api` loads environment and starts authenticated routes.
 2. Websocket subscriptions populate runtime market caches through `src/handlers/ws.rs`.
-3. Read endpoints resolve cached mints, routes, creators, and metadata.
+3. Read endpoints resolve cached mints, routes, creators, and metadata from the live websocket cache, with optional store-backed overlays when `MAMBA_API_STORE_MODE=true`.
 4. Builder endpoints return unsigned transactions and optional simulations.
 5. `mamba` consumes those builders, signs locally when required, and can render deterministic snapshots for UI evidence.
 

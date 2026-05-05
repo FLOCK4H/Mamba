@@ -2,7 +2,7 @@
 
 ## Scope
 
-`mamba_api` is Mamba’s authenticated local backend. It exposes:
+`mamba_api` is Mamba's authenticated local backend. It exposes:
 
 - websocket-backed market data (cached mint snapshots + creator/metadata enrichment),
 - builder-style routes for **token creation**, **pool creation/management**, **wallet transfers**, and **wallet cleanup**,
@@ -51,7 +51,7 @@ Multi-RPC behavior:
 
 Mainnet recommendation:
 
-- Use at least 3 HTTP RPCs across 2 providers if you keep websocket subscriptions active for busy markets like `pump_fun` and `pump_swap`.
+- Busy websocket markets like `pump_fun` and `pump_swap` generally need at least 3 HTTP RPCs across 2 providers.
 - Two URLs on the same host are not enough diversity for sustained parsed-transaction loads.
 
 Important option flags:
@@ -60,7 +60,14 @@ Important option flags:
 - `MAMBA_API_ROUTE_BASE`
 - `MAMBA_API_ALLOW_PRIVATE_NETWORK_CLIENTS`
 - `MAMBA_API_ENABLE_LIVE_SENDS`
+- `MAMBA_API_STORE_MODE`
+- `MAMBA_API_DATABASE_URL` when store mode is enabled
 - `MAMBA_PRIVATE_KEY` only when live execution is intentionally enabled (`MAMBA_API_PRIVATE_KEY` remains a legacy fallback)
+
+Store mode:
+
+- `MAMBA_API_STORE_MODE=true` enables a Postgres-backed store for `/transactions`, `/creators`, and `/creator-mints`.
+- Without store mode, those routes fall back to live websocket cache views and may return less historical detail.
 
 ## Conventions
 
@@ -131,7 +138,7 @@ Example response:
 
 ### `GET /docs`
 
-Machine-readable endpoint index (useful for clients that want to confirm what’s mounted).
+Machine-readable endpoint index.
 
 Example request:
 
@@ -184,7 +191,7 @@ Example response:
 
 ## Websocket control
 
-The mint cache is websocket-backed: `GET /mints` and `GET /ws/stream` are only useful once one or more markets are subscribed.
+The mint cache is websocket-backed. `GET /mints` and `GET /ws/stream` return rows only after at least one market subscription is active.
 
 ### `POST /ws/subscribe`
 
@@ -323,7 +330,7 @@ Example message payload:
 
 ### `GET /mints`
 
-Returns cached websocket-backed mint snapshots. If you have not subscribed to any markets yet, the response will be an empty list.
+Returns cached websocket-backed mint snapshots. Without active market subscriptions, the response is an empty list.
 
 Query params:
 
@@ -1422,7 +1429,7 @@ Example response (trimmed):
 
 ## Store-mode endpoints
 
-These routes are most useful when `MAMBA_API_STORE_MODE=true` is enabled (they will still fall back to the live websocket cache when possible, but may return less complete rows).
+These routes read from Postgres when `MAMBA_API_STORE_MODE=true` and otherwise fall back to live websocket cache views that may omit stored history.
 
 ### `GET /transactions`
 

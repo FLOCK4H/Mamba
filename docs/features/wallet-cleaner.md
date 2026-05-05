@@ -78,7 +78,7 @@ curl -sS \
 - Select the target network.
 - Toggle `burn_nonzero`, `close_empty`, and `unwrap_wsol`.
 - Press `r` to refresh previews.
-- Press `Enter` on `BUILD` to produce bundles, or on `SEND` if live sending is intentionally enabled for your local wallet flow.
+- `Enter` on `BUILD` produces bundles. `SEND` is available only when live sending is intentionally enabled for the local wallet flow.
 
 ![Cleaner screen](../images/mamba_cleaner.svg){ .screenshot-frame }
 

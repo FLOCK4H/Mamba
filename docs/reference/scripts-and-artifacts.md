@@ -9,7 +9,7 @@
 | `scripts/install_mamba_windows.ps1` | Installs Windows host build dependencies, Rust, upstream mirrors, and validates `cargo build --locked --bin mamba --bin mamba_api --bin mamba_mcp` |
 | `scripts/sync_sources.sh` | Refreshes protocol upstream mirrors and rewrites `UPSTREAM_SOURCES.lock` |
 | `scripts/snapshot_to_svg.sh` | Converts deterministic text snapshots into embeddable SVG screenshots |
-| `scripts/print_mamba_mcp_configs.sh` | Prints ready-to-paste MCP client config snippets for the current checkout |
+| `scripts/print_mamba_mcp_configs.sh` | Prints MCP client config snippets for the current checkout |
 | `scripts/generate_docs_inventory.sh` | Generates the tracked repository inventory page for this docs site |
 
 ## Local-only output directories
@@ -33,4 +33,4 @@
 
 ## Notes
 
-- The generated repository inventory page is based on `git ls-files --cached --others --exclude-standard` plus a small local-only exclusion for `Capture.PNG`, so it reflects the checkout without publishing ignored toolchains, secrets, or build output line-by-line.
+- The generated repository inventory page is based on `git ls-files --cached --others --exclude-standard` plus a local-only exclusion for `Capture.PNG`; ignored toolchains, secrets, and build output stay out of the published listing.

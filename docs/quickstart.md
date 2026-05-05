@@ -14,7 +14,7 @@
 powershell -ExecutionPolicy Bypass -File .\scripts\install_mamba_windows.ps1
 ```
 
-- Both scripts install the Rust toolchain pinned in `rust-toolchain.toml`, install host build dependencies, refresh `external/upstreams/`, and run `cargo build --locked --bin mamba --bin mamba_api --bin mamba_mcp` unless you pass the relevant skip flags.
+- Both scripts install the Rust toolchain pinned in `rust-toolchain.toml`, install host build dependencies, refresh `external/upstreams/`, and run `cargo build --locked --bin mamba --bin mamba_api --bin mamba_mcp` by default.
 - Network access for Solana RPC endpoints and upstream source sync
 - A private `.env` copied from `.env.example`
 
@@ -45,7 +45,7 @@ Run the built MCP bridge locally:
 ```
 
 !!! note
-    For Codex, Claude, Gemini CLI, OpenClaw, and other MCP clients, run `./scripts/print_mamba_mcp_configs.sh` to generate ready-to-paste snippets for this checkout. The per-client guide lives in `docs/MCP_CLIENT_SETUP.md`.
+    MCP client snippets for the current checkout come from `./scripts/print_mamba_mcp_configs.sh`. Client-specific setup lives in `docs/MCP_CLIENT_SETUP.md`.
 
 Start the CLI/TUI:
 
@@ -84,7 +84,7 @@ pip install -r requirements-docs.txt
 .venv-docs/bin/mkdocs serve -a 0.0.0.0:8000
 ```
 
-On Debian or Ubuntu, install `python3-venv` first if `python3 -m venv` is unavailable. The Linux bootstrap script handles that automatically.
+Debian and Ubuntu require `python3-venv` when `python3 -m venv` is unavailable. The Linux bootstrap script installs it automatically.
 
 Strict local build:
 
