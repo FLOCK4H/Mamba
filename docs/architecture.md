@@ -2,11 +2,12 @@
 
 ## Runtime model
 
-Mamba is one crate with three user-facing binaries and a set of protocol adapters:
+Mamba is one crate with four user-facing binaries and a set of protocol adapters:
 
 | Surface | Path | Responsibility |
 | --- | --- | --- |
 | Local API | `src/bin/mamba_api.rs` | Starts the authenticated Axum backend through `mamba::api::run_from_env()` |
+| MCP bridge | `src/bin/mamba_mcp.rs` | Exposes the authenticated local API as stdio MCP tools for agent clients |
 | CLI/TUI | `src/bin/mamba.rs` | Interactive trading terminal, snapshots, wallet actions, create flows, swap flows, dashboards |
 | Inspect tool | `src/bin/mamba_tx_inspect.rs` | Reads a base64 transaction and verifies expected signer assumptions |
 
@@ -29,7 +30,8 @@ Mamba is one crate with three user-facing binaries and a set of protocol adapter
 2. Websocket subscriptions populate runtime market caches through `src/handlers/ws.rs`.
 3. Read endpoints resolve cached mints, routes, creators, and metadata from the live websocket cache, with optional store-backed overlays when `MAMBA_API_STORE_MODE=true`.
 4. Builder endpoints return unsigned transactions and optional simulations.
-5. `mamba` consumes those builders, signs locally when required, and can render deterministic snapshots for UI evidence.
+5. `mamba_mcp` forwards the same API surface to MCP clients without exposing private keys.
+6. `mamba` consumes those builders, signs locally when required, and can render deterministic snapshots for UI evidence.
 
 ## Wallet surfaces
 

@@ -1,6 +1,6 @@
 # Mamba CLI and TUI
 
-`mamba` is the degen-facing terminal application for Create, Swap, Dash, wallet management, and wallet cleaning.
+`mamba` is the terminal application for Create, Swap, Dash, Pools, Wallet, Cleaner, and MEV or SWQoS setup.
 
 ## Main menu
 
@@ -9,9 +9,12 @@ The current main menu is:
 1. Create
 2. Swap
 3. Dash
-4. Cleaner
-5. Help
-6. Quit
+4. Pools
+5. Wallet
+6. Cleaner
+7. MEV / SWQoS
+8. Help
+9. Quit
 
 ![Mamba menu](images/mamba_menu.svg){ .screenshot-frame }
 
@@ -100,7 +103,7 @@ Mainnet note:
 | Context | Keys |
 | --- | --- |
 | Global | `Ctrl-C` quit, `F1` help, `F4` provider setup, `Esc` back |
-| Menu | `Up/Down`, `Enter`, `1..6` |
+| Menu | `Up/Down`, `Enter`, `1..9` |
 | Cleaner | `Up/Down` move, `Left/Right` toggle, `r` refresh, `Enter` run `BUILD` or `SEND` |
 | Create | `Tab` or arrows to move, typing to edit, `Enter` build/sign |
 | Swap | paste mint, route lookup, low-LQ warning review, trade controls, per-swap priority fee override |

@@ -1,201 +1,149 @@
 # Mamba
 
-  <img src="docs/images/mamba_icon.png" width=128 />
+<p>
+  <img src="docs/images/mamba_icon.png" width="96" alt="Mamba icon">
+</p>
 
-Rust-based Solana market kit: multi-market adapters, decoding, routing, a local authenticated API, an MCP server, and a CLI/TUI.
+[![Docs](https://github.com/FLOCK4H/Mamba/actions/workflows/docs.yml/badge.svg?event=push)](https://github.com/FLOCK4H/Mamba/actions/workflows/docs.yml)
+[![Stars](https://img.shields.io/github/stars/FLOCK4H/Mamba?style=flat-square)](https://github.com/FLOCK4H/Mamba/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/FLOCK4H/Mamba?style=flat-square)](https://github.com/FLOCK4H/Mamba/commits)
 
-## What it is
+Mamba is a local Solana trading and market toolkit written in Rust. It watches live markets over websocket, keeps a mint cache in memory, finds routes, plans trades, sends them when live mode is unlocked, and exposes the same core through a local API, an MCP server, a terminal app, and a transaction inspector.
 
-- A reusable Solana Rust integration kit (library + binaries).
-- `mamba_api`: an authenticated local HTTP API with websocket-backed market ingestion plus build-first transaction builders and execute routes that keep signing inside Mamba.
-- `mamba_mcp`: a stdio MCP server that mirrors Mamba API functionality so an agent can buy, sell, list tokens, transfer assets, clean wallets, create tokens, and manage pools without direct key access.
-- `mamba`: a CLI/TUI for live websocket validation, Create (token launch), Trade UX, and deterministic snapshot “screenshots”.
+[Quickstart](docs/quickstart.md) | [API](docs/MAMBA_API.md) | [MCP](docs/MAMBA_MCP.md) | [CLI](docs/MAMBA_CLI.md) | [Markets](docs/markets.md)
 
-## Quickstart (local)
+## What traders can do right now
+
+- Subscribe to live markets and keep a local mint feed running in memory.
+- Filter that feed by market, search, liquidity, and volume through `/mints` or `/ws/stream`.
+- Check route, pool, creator, metadata, price, and low-liquidity warnings before a trade.
+- Dry-run or send buys and sells with slippage, retries, priority fee control, and optional SWQoS on mainnet.
+- Create wallets, pick the active wallet, check balances, move SOL or SPL tokens, and clean old token accounts.
+- Launch tokens with `pump_fun`, `spl_token`, `spl_token_2022`, or `raydium_launchpad`.
+- Create pools on supported markets and manage positions that support withdrawal.
+- Keep live history in memory, or turn on Postgres store mode for `/transactions`, `/creators`, and `/creator-mints`.
+
+## Choose the surface
+
+| Surface | Use it for | Notes |
+| --- | --- | --- |
+| `mamba_api` | Local bots, dashboards, backend products, direct HTTP control | Authenticated local API for market data, swaps, wallets, create, pools, and optional stored history |
+| `mamba_mcp` | Codex, Claude, and other MCP clients | Same local power through tools. Signing stays inside Mamba |
+| `mamba` | Manual trading in a terminal | Quick trade, live monitor, create, pool, wallet, cleaner, holder lookup, snapshots |
+| `mamba_tx_inspect` | Checking a built transaction before send | Reads base64 from an argument or `stdin` and checks signer assumptions |
+
+Teams can build on top of `mamba_api` or `mamba_mcp` instead of redoing websocket ingestion, route discovery, wallet flows, token launch flows, and pool builders from scratch.
+
+## Market coverage
+
+Mamba targets 10 markets. The mint-first buy or sell flow is not complete across all 10 yet, so the split stays explicit.
+
+- Mint-first buy or sell works now on `raydium_clmm`, `meteora_dlmm`, `pump_fun`, `pump_swap`, and `meteora_damm_v1`.
+- Still being finished in that flow: `meteora_damm_v2`, `meteora_dbc`, `raydium_cpmm`, `raydium_amm_v4`, and `raydium_launchpad`.
+- Token create methods: `pump_fun`, `spl_token`, `spl_token_2022`, `raydium_launchpad`.
+- Pool create methods: `pump_swap`, `raydium_cpmm`, `raydium_clmm`, `meteora_dlmm`, `meteora_damm_v1`, `raydium_amm_v4`, `meteora_damm_v2`, `meteora_dbc`.
+- `pump_fun` and `raydium_launchpad` are not standalone pool-create paths because those pool steps are tied to the launch flow.
+
+See [docs/markets.md](docs/markets.md) for the current split and repo target.
+
+## Quickstart
 
 ```bash
-# Linux bootstrap
+# Linux
 ./scripts/install_mamba_linux.sh
 
-# macOS bootstrap
+# macOS
 ./scripts/install_mamba_macos.sh
 
-# Windows PowerShell bootstrap
+# Windows PowerShell
 powershell -ExecutionPolicy Bypass -File .\scripts\install_mamba_windows.ps1
 
 cp .env.example .env
-export MAMBA_API_KEY='change_me'
 
-# API (authenticated; default bind 127.0.0.1:8787, base /mamba-api)
+# start the local API
 cargo run --bin mamba_api
 
-# MCP bridge binary (recommended for Codex/GUI MCP clients)
-cargo build --bin mamba_mcp
-./target/debug/mamba_mcp
-
-# CLI/TUI (devnet defaults when URLs are unset)
+# start the terminal app
 cargo run --bin mamba --
+
+# build the MCP bridge for GUI clients
+cargo build --bin mamba_mcp
 ```
 
-The bootstrap scripts read the pinned Rust toolchain from `rust-toolchain.toml`, install host build dependencies, refresh `external/upstreams/` via `scripts/sync_sources.sh`, and finish with `cargo build --locked --bin mamba --bin mamba_api --bin mamba_mcp` by default.
-
-`./scripts/print_mamba_mcp_configs.sh` emits MCP client snippets for the current checkout. Client-specific setup lives in `docs/MCP_CLIENT_SETUP.md`.
-
-## Platform support
-
-- Linux: first-class path. The repo is actively validated on a GUI Linux VM.
-- macOS: supported through `scripts/install_mamba_macos.sh` plus the normal Cargo workflow.
-- Windows: supported through `scripts/install_mamba_windows.ps1` and PowerShell.
-
-The primary runtime is host-native Rust binaries. Docker and a frontend are not required.
-
-`mamba_api` maintains an in-memory websocket mint cache for live market views. `MAMBA_API_STORE_MODE=true` optionally enables a Postgres-backed API store for `/transactions`, `/creators`, and `/creator-mints`.
-
-## Required environment
-
-Minimum setup:
-
-- `MAMBA_API_KEY` for authenticated API routes
-- `MAMBA_PRIVATE_KEY` for signed build or execute flows
-- `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` for explicit RPC selection
-
-Optional store mode:
-
-- `MAMBA_API_STORE_MODE=true`
-- `MAMBA_API_DATABASE_URL=<postgres connection string>`
-
-`MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` accept comma-separated lists. `mamba_api`, `mamba`, and `mamba_mcp` all use that pool end-to-end: read-heavy paths rotate across it automatically and temporarily cool down rate-limited endpoints instead of hammering the same RPC.
-
-Useful cluster examples:
+Set these in `.env` for the first run:
 
 ```bash
-# Devnet
-export MAMBA_API_HTTP_URLS=https://api.devnet.solana.com
-export MAMBA_API_WS_URLS=wss://api.devnet.solana.com
-
-# Mainnet
-export MAMBA_API_HTTP_URLS=https://api.mainnet-beta.solana.com
-export MAMBA_API_WS_URLS=wss://api.mainnet-beta.solana.com
+MAMBA_API_KEY=change_me
+MAMBA_API_HTTP_URLS=https://api.devnet.solana.com
+MAMBA_API_WS_URLS=wss://api.devnet.solana.com
 ```
 
-Mainnet recommendation:
+The bootstrap scripts install the pinned Rust toolchain from `rust-toolchain.toml`, install host build deps, refresh `external/upstreams/`, and finish with `cargo build --locked --bin mamba --bin mamba_api --bin mamba_mcp`.
 
-- Use at least 3 HTTP RPCs across 2 providers for sustained websocket + parsed-transaction workloads.
-- Do not count multiple API keys on the same host as real diversity; `https://mainnet.helius-rpc.com/?api-key=A` and `...?api-key=B` can still 429 together.
-- Keep every URL in the list on the same Solana cluster.
+`MAMBA_PRIVATE_KEY` is only needed for sign or send flows. Read-only market discovery works without it.
 
-For LAN or host-visible API access, bind to a non-loopback address and explicitly allow private-network clients:
+## First calls
+
+Fill the live mint cache for a market:
 
 ```bash
-export MAMBA_API_BIND_ADDR=0.0.0.0:8787
-export MAMBA_API_ALLOW_PRIVATE_NETWORK_CLIENTS=true
+curl -sS \
+  -H "x-api-key: $MAMBA_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{ "market": "pump_fun" }' \
+  http://127.0.0.1:8787/mamba-api/v1/ws/subscribe
 ```
 
-## Documentation
-
-MkDocs Material site sourced from `docs/` plus a generated repository inventory page.
-
-Local preview:
+Read the current mint feed:
 
 ```bash
-python3 -m venv .venv-docs
-. .venv-docs/bin/activate
-pip install -r requirements-docs.txt
-./scripts/generate_docs_inventory.sh
-mkdocs serve -a 0.0.0.0:8000
+curl -sS \
+  -H "x-api-key: $MAMBA_API_KEY" \
+  "http://127.0.0.1:8787/mamba-api/v1/mints?markets=pump_fun,pump_swap&limit=20&min_liquidity=1"
 ```
 
-GitHub Pages publication is defined in [`.github/workflows/docs.yml`](.github/workflows/docs.yml) and uses the `GitHub Actions` source.
-
-Primary source pages:
-
-- Overview: `docs/index.md`
-- API: `docs/MAMBA_API.md`
-- MCP: `docs/MAMBA_MCP.md`
-- MCP client setup: `docs/MCP_CLIENT_SETUP.md`
-- CLI/TUI: `docs/MAMBA_CLI.md`
-- Create runbook: `docs/MAMBA_CREATE.md`
-- Wallet cleaner: `docs/features/wallet-cleaner.md`
-
-## Runtime checks
-
-API health:
+Plan a buy without sending it:
 
 ```bash
-curl -sS -H "x-api-key: $MAMBA_API_KEY" \
-  http://127.0.0.1:8787/mamba-api/v1/health
+curl -sS \
+  -H "x-api-key: $MAMBA_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "side": "buy",
+    "mint": "<MINT>",
+    "market_priority": "pump_fun,pump_swap,raydium_clmm",
+    "slippage_pct": 25
+  }' \
+  http://127.0.0.1:8787/mamba-api/v1/swap
 ```
 
-Deterministic TUI snapshots:
+## Runtime
 
-```bash
-cargo run --bin mamba -- --snapshot
-```
+- Host-native Rust binaries on Linux, macOS, and Windows.
+- No Docker is required.
+- No bundled web frontend ships with the repo.
+- Websocket subscriptions fill the in-memory mint cache used by `/mints` and `/ws/stream`.
+- `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` accept same-cluster comma-separated lists.
+- `MAMBA_API_STORE_MODE=true` plus `MAMBA_API_DATABASE_URL` turns on the optional Postgres store.
 
-Snapshots are written to `artifacts/cli-screenshots/`.
+For busy mainnet websocket markets, use at least 3 HTTP RPCs across 2 providers. Two URLs on the same host can still throttle together.
 
-## Supported markets (10)
+## Live send model
 
-- Raydium CLMM
-- Meteora DLMM
-- Pump.fun
-- PumpSwap AMM
-- Meteora DAMM v1
-- Meteora DAMM v2
-- Meteora DBC (Believe path)
-- Raydium CPMM
-- Raydium AMM v4
-- Raydium Launchpad
+- Create, pool, wallet transfer, and wallet clean routes are build-first by default.
+- `/swap` plans by default. It only sends when `execute=true`.
+- Live sends require `MAMBA_API_ENABLE_LIVE_SENDS=true`.
+- Signing stays inside Mamba through the configured API signer or the managed wallet store.
+- Cross-cluster live sends are blocked. A devnet API runtime cannot be turned into a mainnet sender with `rpc_url`.
 
-## Safety model (high level)
+## Docs
 
-- Build-first by default. Live execution routes exist, but signing stays inside Mamba through the configured API signer or managed wallet store.
-- Treat `.env` and any private keys as sensitive.
-- Devnet is the expected automated validation cluster.
-- Mainnet execution stays manual by default unless explicitly unlocked for a session.
-
-## Devnet validation
-
-Smoke-test the authenticated API and local create/pool coverage:
-
-```bash
-# Start the API on devnet
-MAMBA_API_HTTP_URLS=https://api.devnet.solana.com \
-MAMBA_API_WS_URLS=wss://api.devnet.solana.com \
-cargo run --bin mamba_api
-
-# In another shell
-cargo run --bin mamba -- --pool-suite --http-url https://api.devnet.solana.com
-```
-
-When the suite asks for cached setup state, run the one-time setup path:
-
-```bash
-cargo run --bin mamba -- --pool-suite --pool-suite-setup-send --http-url https://api.devnet.solana.com
-```
-
-## Troubleshooting
-
-### API startup fails before `/health` appears
-
-Mamba surfaces the upstream `getGenesisHash` reason instead of only returning a generic RPC failure. A common case is an exhausted hosted provider, for example:
-
-```text
-rpc error -32429: max usage reached
-```
-
-Check the latest autostart or direct API logs under `artifacts/logs/`, then either refresh the provider key or override to a healthy RPC endpoint:
-
-```bash
-MAMBA_API_HTTP_URLS=https://api.mainnet-beta.solana.com \
-MAMBA_API_WS_URLS=wss://api.mainnet-beta.solana.com \
-cargo run --bin mamba_api
-```
-
-### Raydium Launchpad create simulation fails with `InvalidInput`
-
-Launchpad supply limits are enforced against token decimals. Increasing decimals without scaling raw supply causes the program to reject the create request during `InitializeV2`. The pool suite uses `decimals=6` for the Launchpad smoke path because that matches Raydium's documented default and current devnet-compatible presets.
-
-### Websocket-backed views look empty
-
-Start `mamba_api`, verify `/health`, then leave subscriptions active for at least 15 seconds. The validation harnesses and monitor surfaces are websocket-first and intentionally avoid tight HTTP polling loops.
+- [docs/quickstart.md](docs/quickstart.md)
+- [docs/MAMBA_API.md](docs/MAMBA_API.md)
+- [docs/MAMBA_MCP.md](docs/MAMBA_MCP.md)
+- [docs/MAMBA_CLI.md](docs/MAMBA_CLI.md)
+- [docs/MAMBA_CREATE.md](docs/MAMBA_CREATE.md)
+- [docs/features/wallet-cleaner.md](docs/features/wallet-cleaner.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/markets.md](docs/markets.md)
+- [docs/MCP_CLIENT_SETUP.md](docs/MCP_CLIENT_SETUP.md)
