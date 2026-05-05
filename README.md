@@ -1,12 +1,12 @@
 # Mamba
 
-![Mamba icon](docs/images/mamba_icon.png)
+  <img src="docs/images/mamba_icon.png" width=128 />
 
-Rust-based Solana market kit: multi-market adapters, decoding, routing, a local authenticated API, an MCP server, and a degen-friendly CLI/TUI.
+Rust-based Solana market kit: multi-market adapters, decoding, routing, a local authenticated API, an MCP server, and a CLI/TUI.
 
 ## What it is
 
-- A reusable Solana Rust integration kit (library + binaries), not a single-purpose bot.
+- A reusable Solana Rust integration kit (library + binaries).
 - `mamba_api`: an authenticated local HTTP API with websocket-backed market ingestion plus build-first transaction builders and execute routes that keep signing inside Mamba.
 - `mamba_mcp`: a stdio MCP server that mirrors Mamba API functionality so an agent can buy, sell, list tokens, transfer assets, clean wallets, create tokens, and manage pools without direct key access.
 - `mamba`: a CLI/TUI for live websocket validation, Create (token launch), Trade UX, and deterministic snapshot “screenshots”.
