@@ -36,15 +36,14 @@ Teams can build on top of `mamba_api` or `mamba_mcp` instead of redoing websocke
 
 ## Market coverage
 
-Mamba targets 10 markets. The mint-first buy or sell flow is not complete across all 10 yet, so the split stays explicit.
+Mamba implements 10 markets for websocket ingestion, route lookup, price lookup, and buy or sell flows.
 
-- Mint-first buy or sell works now on `raydium_clmm`, `meteora_dlmm`, `pump_fun`, `pump_swap`, and `meteora_damm_v1`.
-- Still being finished in that flow: `meteora_damm_v2`, `meteora_dbc`, `raydium_cpmm`, `raydium_amm_v4`, and `raydium_launchpad`.
+- Trading markets: `pump_swap`, `pump_fun`, `raydium_amm_v4`, `raydium_launchpad`, `raydium_clmm`, `raydium_cpmm`, `meteora_dlmm`, `meteora_damm_v1`, `meteora_damm_v2`, `meteora_dbc`.
 - Token create methods: `pump_fun`, `spl_token`, `spl_token_2022`, `raydium_launchpad`.
 - Pool create methods: `pump_swap`, `raydium_cpmm`, `raydium_clmm`, `meteora_dlmm`, `meteora_damm_v1`, `raydium_amm_v4`, `meteora_damm_v2`, `meteora_dbc`.
 - `pump_fun` and `raydium_launchpad` are not standalone pool-create paths because those pool steps are tied to the launch flow.
 
-See [docs/markets.md](docs/markets.md) for the current split and repo target.
+See [docs/markets.md](docs/markets.md) for the code-backed market breakdown.
 
 ## Quickstart
 
@@ -102,7 +101,7 @@ curl -sS \
   "http://127.0.0.1:8787/mamba-api/v1/mints?markets=pump_fun,pump_swap&limit=20&min_liquidity=1"
 ```
 
-Plan a buy without sending it:
+Use `/swap` in dry-run mode:
 
 ```bash
 curl -sS \
@@ -111,8 +110,10 @@ curl -sS \
   -d '{
     "side": "buy",
     "mint": "<MINT>",
+    "buy_sol": 0.01,
     "market_priority": "pump_fun,pump_swap,raydium_clmm",
-    "slippage_pct": 25
+    "slippage_pct": 25,
+    "execute": false
   }' \
   http://127.0.0.1:8787/mamba-api/v1/swap
 ```

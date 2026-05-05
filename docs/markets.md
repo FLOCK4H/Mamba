@@ -1,8 +1,8 @@
 # Markets
 
-## Target market set
+## Trading markets
 
-The repository target is full parity across these 10 markets:
+Mamba implements these 10 markets in the trading stack:
 
 1. Raydium CLMM
 2. Meteora DLMM
@@ -15,25 +15,44 @@ The repository target is full parity across these 10 markets:
 9. Raydium AMM v4
 10. Raydium Launchpad
 
-## Current split to keep explicit
+In code, those 10 appear in `src/dex/swaps.rs` as the `Market` enum, the default market priority, the websocket route labels, and the market dispatch for route lookup, price lookup, buy, and sell.
 
-Per `AGENTS.md`, the main-menu mint-first Buy/Sell flow is not yet considered market-complete. The repo should keep this split explicit until the remaining markets are fully stable.
+## What is implemented
 
-Coverage snapshot from `AGENTS.md`, dated **March 14, 2026**:
+Across those 10 markets, Mamba has code paths for:
 
-| Mint-first Buy/Sell flow | Markets |
-| --- | --- |
-| Enabled now | Raydium CLMM, Meteora DLMM, Pump.fun, PumpSwap AMM, Meteora DAMM v1 |
-| Still pending or hanging | Meteora DAMM v2, Meteora DBC, Raydium CPMM, Raydium AMM v4, Raydium Launchpad |
+- websocket subscription and live mint ingestion
+- mint-to-pool route lookup
+- price lookup
+- creator lookup
+- buy execution
+- sell execution
 
-## Integration contract
+The local API exposes those markets through `/markets`, `/ws/subscribe`, `/mints`, `/mints/{mint}/route`, and `/swap`.
 
-Each market integration is expected to include:
+The TUI and MCP layer both sit on top of the same routing and swap surface.
 
-- protocol-specific constants and discriminators kept inside the market module
-- websocket subscription coverage comparable to Pump.fun and PumpSwap patterns
-- decoder and instruction-contract fixtures
-- actionable diagnostics for send and confirm failures
+## Code evidence
+
+The clearest code-level checks are:
+
+- `src/dex/swaps.rs`
+  - `Market` includes all 10 markets
+  - `DEFAULT_MARKET_PRIORITY` includes all 10 markets
+  - buy and sell dispatch handle all 10 markets
+- `src/api/mod.rs`
+  - `/ws/subscribe` accepts and dispatches all 10 markets
+  - `/swap` resolves routes and executes against the selected market
+- `src/dex/operator_live_tests.rs`
+  - contains a `first_ws_mint_buy_sell_confirm` live operator test for each of the 10 markets
+
+## Create and pool notes
+
+Trading support and pool creation support are not the same thing.
+
+- `pump_fun` and `raydium_launchpad` are supported trading markets.
+- `pump_fun` and `raydium_launchpad` are not standalone pool-create methods because their pool step is part of the launch flow.
+- Standalone pool creation is exposed for `pump_swap`, `raydium_cpmm`, `raydium_clmm`, `meteora_dlmm`, `meteora_damm_v1`, `raydium_amm_v4`, `meteora_damm_v2`, and `meteora_dbc`.
 
 ## Upstream drift control
 
