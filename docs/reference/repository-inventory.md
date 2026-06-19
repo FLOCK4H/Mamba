@@ -4,8 +4,8 @@ Repository paths indexed from `git ls-files --cached --others --exclude-standard
 
 ## Coverage
 
-- Indexed paths: 111
-- Generated at: 2026-06-19 15:19:30 UTC
+- Indexed paths: 112
+- Generated at: 2026-06-19 19:18:20 UTC
 - Inventory source: `git ls-files --cached --others --exclude-standard`
 - Ignored paths excluded through `.gitignore` (for example `target/`, `.venv-docs/`, `.env`, `docs-site/`, `PACKAGING.md`, and synced `external/upstreams/` mirrors)
 - Additional local-only exclusion: `Capture.PNG`
@@ -14,7 +14,7 @@ Repository paths indexed from `git ls-files --cached --others --exclude-standard
 
 | Group | Indexed paths |
 | --- | ---: |
-| repository root | 9 |
+| repository root | 10 |
 | `.github/` | 1 |
 | `docs/` | 17 |
 | `external/` | 14 |
@@ -28,7 +28,7 @@ The sections below expand to the indexed paths currently present in the checkout
 
 ### Repository root
 
-<details><summary>Show indexed paths (9)</summary>
+<details><summary>Show indexed paths (10)</summary>
 
 ```text
 .env.example
@@ -37,6 +37,7 @@ Cargo.lock
 Cargo.toml
 README.md
 UPSTREAM_SOURCES.lock
+market_check_19_06_2026.md
 mkdocs.yml
 requirements-docs.txt
 rust-toolchain.toml
@@ -59,8 +60,6 @@ rust-toolchain.toml
 <details><summary>Show indexed paths (17)</summary>
 
 ```text
-docs/images/mamba_500_500.png
-docs/images/mamba_text_1280_640.png
 docs/MAMBA_API.md
 docs/MAMBA_CLI.md
 docs/MAMBA_CREATE.md
@@ -68,6 +67,8 @@ docs/MAMBA_MCP.md
 docs/MCP_CLIENT_SETUP.md
 docs/architecture.md
 docs/features/wallet-cleaner.md
+docs/images/mamba_500_500.png
+docs/images/mamba_text_1280_640.png
 docs/index.md
 docs/markets.md
 docs/quickstart.md

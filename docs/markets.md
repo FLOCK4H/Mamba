@@ -1,64 +1,70 @@
 # Markets
 
-## Trading markets
+Mamba implements 10 Solana DEX markets with full websocket ingestion, route discovery, pricing, and buy/sell execution.
 
-Mamba implements these 10 markets in the trading stack:
+## Coverage matrix
 
-1. Raydium CLMM
-2. Meteora DLMM
-3. Pump.fun
-4. PumpSwap AMM
-5. Meteora DAMM v1
-6. Meteora DAMM v2
-7. Meteora DBC
-8. Raydium CPMM
-9. Raydium AMM v4
-10. Raydium Launchpad
+| Market | Trade | Websocket | Route lookup | Price | Create token | Create pool |
+|--------|:-----:|:---------:|:------------:|:-----:|:------------:|:-----------:|
+| PumpSwap AMM | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Pump.fun | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| Raydium AMM v4 | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Raydium Launchpad | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| Raydium CLMM | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Raydium CPMM | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Meteora DLMM | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Meteora DAMM v1 | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Meteora DAMM v2 | ✓ | ✓ | ✓ | ✓ | | ✓ |
+| Meteora DBC | ✓ | ✓ | ✓ | ✓ | | ✓ |
 
-In code, those 10 appear in `src/dex/swaps.rs` as the `Market` enum, the default market priority, the websocket route labels, and the market dispatch for route lookup, price lookup, buy, and sell.
+**Token creation** is also supported via `spl_token` and `spl_token_2022` outside of market-specific launch flows.
 
-## What is implemented
+**Pool creation** is not available for `pump_fun` or `raydium_launchpad` because their pool step is part of the token launch flow, not a standalone operation.
 
-Across those 10 markets, Mamba has code paths for:
+## API surface
 
-- websocket subscription and live mint ingestion
-- mint-to-pool route lookup
-- price lookup
-- creator lookup
-- buy execution
-- sell execution
+The local API exposes these markets through:
 
-The local API exposes those markets through `/markets`, `/ws/subscribe`, `/mints`, `/mints/{mint}/route`, and `/swap`.
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /markets` | List all supported market identifiers |
+| `POST /ws/subscribe` | Start a market websocket subscription |
+| `GET /mints` | Query the live mint cache |
+| `GET /mints/{mint}/route` | Resolve a swap route for a mint |
+| `POST /swap` | Plan or execute a swap against any market |
 
-The TUI and MCP layer both sit on top of the same routing and swap surface.
+The TUI and MCP bridge both sit on top of the same routing and swap surface.
 
-## Code evidence
+## Code paths
 
-The clearest code-level checks are:
+The definitive code-level checks for market support:
 
-- `src/dex/swaps.rs`
-  - `Market` includes all 10 markets
-  - `DEFAULT_MARKET_PRIORITY` includes all 10 markets
-  - buy and sell dispatch handle all 10 markets
-- `src/api/mod.rs`
-  - `/ws/subscribe` accepts and dispatches all 10 markets
-  - `/swap` resolves routes and executes against the selected market
-- `src/dex/operator_live_tests.rs`
-  - contains a `first_ws_mint_buy_sell_confirm` live operator test for each of the 10 markets
+| File | What to look for |
+|------|-----------------|
+| `src/dex/swaps.rs` | `Market` enum includes all 10. `DEFAULT_MARKET_PRIORITY` includes all 10. Buy and sell dispatch handle all 10. |
+| `src/api/mod.rs` | `/ws/subscribe` accepts all 10. `/swap` resolves routes and executes against the selected market. |
+| `src/dex/operator_live_tests.rs` | Contains a `first_ws_mint_buy_sell_confirm` live test for each of the 10 markets. |
 
-## Create and pool notes
+Each market has its own adapter file in `src/dex/`:
 
-Trading support and pool creation support are not the same thing.
-
-- `pump_fun` and `raydium_launchpad` are supported trading markets.
-- `pump_fun` and `raydium_launchpad` are not standalone pool-create methods because their pool step is part of the launch flow.
-- Standalone pool creation is exposed for `pump_swap`, `raydium_cpmm`, `raydium_clmm`, `meteora_dlmm`, `meteora_damm_v1`, `raydium_amm_v4`, `meteora_damm_v2`, and `meteora_dbc`.
+| Adapter | File |
+|---------|------|
+| Pump.fun | `src/dex/pump_fun.rs` |
+| PumpSwap | `src/dex/pump_swap.rs` |
+| Raydium CLMM | `src/dex/raydium_clmm.rs` |
+| Raydium CPMM | `src/dex/raydium_cpmm.rs` |
+| Raydium AMM v4 | `src/dex/raydium_amm_v4.rs` |
+| Raydium Launchpad | `src/dex/raydium_launchpad.rs` |
+| Meteora DLMM | `src/dex/meteora_dlmm.rs` |
+| Meteora DAMM v1 | `src/dex/meteora_damm_v1.rs` |
+| Meteora DAMM v2 | `src/dex/meteora_damm_v2.rs` |
+| Meteora DBC | `src/dex/meteora_dbc.rs` |
 
 ## Upstream drift control
 
-Protocol-facing work is tied to the upstream sync process:
+Protocol-facing work follows the upstream sync process:
 
-- refresh sources with `scripts/sync_sources.sh`
-- verify the result in `UPSTREAM_SOURCES.lock`
-- keep evidence in `STATUS.md`
-- add findings or workarounds to `FINDINGS.md`
+1. Refresh sources with `scripts/sync_sources.sh`
+2. Verify the result in `UPSTREAM_SOURCES.lock`
+3. Record evidence in `STATUS.md`
+4. Append findings or workarounds to `FINDINGS.md`

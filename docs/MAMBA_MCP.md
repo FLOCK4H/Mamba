@@ -1,25 +1,13 @@
 # Mamba MCP Server
 
-`mamba_mcp` is a stdio MCP bridge on top of Mamba's authenticated local API. It is designed for agent control without exposing private keys: the agent talks MCP, MCP talks HTTP to `mamba_api`, and Mamba performs any signing locally.
+`mamba_mcp` is a stdio-based MCP bridge that sits in front of Mamba's authenticated local API. Agents talk MCP over stdin/stdout, `mamba_mcp` forwards requests as authenticated HTTP calls to `mamba_api`, and Mamba handles all signing locally. Private keys never leave the process boundary.
 
-The MCP layer is intended to be self-sufficient. Agents should not need `solana` CLI or any extra host packages for wallet balance checks, metadata lookup, Launchpad config discovery, or transaction planning that the local API already supports.
-
-RPC behavior is owned by `mamba_api`, not by the MCP bridge. The API-configured multi-RPC pool is inherited by MCP tools for reads, simulations, wallet routes, create flows, and execute flows.
-
-## Why it exists
-
-- Agents can discover tokens, creators, subscriptions, and routes through normal MCP tools.
-- Agents can schedule buys, sells, transfers, cleanup, token creation, and pool actions without direct key access.
-- The same safety controls used by the local API still apply:
-  - authenticated access through `MAMBA_API_KEY`
-  - build-first behavior by default
-  - live sends only when `MAMBA_API_ENABLE_LIVE_SENDS=true`
-  - signer material stays inside Mamba through `MAMBA_PRIVATE_KEY` (legacy `MAMBA_API_PRIVATE_KEY` still accepted) or the managed wallet store
+The MCP layer is self-sufficient. Agents do not need the `solana` CLI or any host-installed packages for balance checks, metadata lookups, Launchpad config discovery, or transaction planning.
 
 ## Architecture
 
 ```text
-Agent MCP client
+Agent (MCP client)
   -> stdio
     -> mamba_mcp
       -> authenticated HTTP
@@ -28,16 +16,22 @@ Agent MCP client
             -> Solana RPC
 ```
 
-Important contract:
+RPC behavior is owned by `mamba_api`. The API-configured multi-RPC pool is inherited by all MCP tools for reads, simulations, wallet operations, create flows, and execution.
 
-- MCP tool responses are wrapped as `{ "data": ... }`.
-- `mamba_mcp` never returns private keys.
-- Execute tools only submit transactions when the backing API is already unlocked and has a local signer available.
-- The MCP server exposes a built-in decision resource at `mamba://tool-playbook` with canonical tool-selection rules for common intents.
+### Contracts
 
-## Start it
+| Contract | Detail |
+|---|---|
+| Response envelope | All MCP tool responses are wrapped as `{ "data": ... }` |
+| Key isolation | `mamba_mcp` never returns private keys |
+| Execute gating | Transactions are submitted only when the backing API has live sends unlocked and a local signer available |
+| Decision resource | Built-in playbook at `mamba://tool-playbook` with canonical tool-selection rules |
 
-Start the authenticated API first:
+## Setup
+
+### 1. Start `mamba_api`
+
+The API must be running before `mamba_mcp` can connect.
 
 ```bash
 export MAMBA_API_KEY='mamba_test_key'
@@ -45,64 +39,30 @@ export MAMBA_PRIVATE_KEY='<base58-64-byte-keypair-or-json-[u8;64]>'
 cargo run --bin mamba_api
 ```
 
-For mainnet websocket throughput, set `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` before starting the API. Use comma-separated same-cluster lists and prefer at least 3 HTTP RPCs across 2 providers for sustained MCP/API/TUI activity.
+For mainnet websocket throughput, set `MAMBA_API_HTTP_URLS` and `MAMBA_API_WS_URLS` before starting the API. Use comma-separated same-cluster lists and prefer at least 3 HTTP RPCs across 2 providers.
 
-Build the MCP binary first:
+### 2. Build `mamba_mcp`
 
 ```bash
 cargo build --bin mamba_mcp
 ```
 
-Optional MCP-specific environment variables:
+### Environment Variables
 
-- `MAMBA_MCP_API_URL`
-  - default: `http://127.0.0.1:8787/mamba-api/v1`
-  - `MAMBA_API_BASE_URL` is also accepted as a fallback
-- `MAMBA_MCP_API_KEY`
-  - falls back to `MAMBA_API_KEY`
-- `MAMBA_MCP_TIMEOUT_SECS`
-  - default: `30`
-- `AUTO_ACCEPT_LOW_LQ_POOLS`
-  - default: `false`
-  - when `false`, MCP execute calls default to `skip_low_lq_pools=true` unless the caller explicitly overrides after user confirmation
+| Variable | Default | Notes |
+|---|---|---|
+| `MAMBA_MCP_API_URL` | `http://127.0.0.1:8787/mamba-api/v1` | Also accepts `MAMBA_API_BASE_URL` as fallback |
+| `MAMBA_MCP_API_KEY` | Falls back to `MAMBA_API_KEY` | Must match the key used by `mamba_api` |
+| `MAMBA_MCP_TIMEOUT_SECS` | `30` | Per-request timeout for HTTP calls to the API |
+| `AUTO_ACCEPT_LOW_LQ_POOLS` | `false` | When `false`, execute calls default to `skip_low_lq_pools=true` unless the caller explicitly overrides |
 
-Client-specific installation recipes for Codex, Claude Code, Claude Desktop, Gemini CLI, and OpenClaw live in `docs/MCP_CLIENT_SETUP.md`.
+## Client Configuration
 
-## Client config example
+GUI MCP launchers (Codex, Claude Desktop, etc.) are not interactive shells. They may lack your Rust toolchain PATH or `rustup` environment. Point them at the **built binary** rather than `cargo run`.
 
-Codex / GUI MCP configuration to use:
+Using the binary with no arguments removes the most common failure mode. Rebuild after code changes with `cargo build --bin mamba_mcp`, then reconnect.
 
-| Field | Recommended value |
-| --- | --- |
-| Command to launch | Absolute path to the built binary, for example `/absolute/path/to/mamba/target/debug/mamba_mcp` |
-| Arguments | Leave empty |
-| Environment variables | `MAMBA_MCP_API_URL=http://127.0.0.1:8787/mamba-api/v1` and `MAMBA_MCP_API_KEY=<same value as MAMBA_API_KEY>` |
-| Working directory | Absolute repo root, for example `/absolute/path/to/mamba` |
-
-A working Codex GUI configuration has these properties:
-
-- command points straight at the built `mamba_mcp` binary
-- arguments are empty
-- MCP API URL and key are passed explicitly
-- working directory stays at the repository root
-
-Why the binary path is preferred for GUI client launch:
-
-- GUI MCP launchers are not interactive shells. They may not inherit the same Rust toolchain PATH or `rustup` environment as the terminal.
-- `cargo run --bin mamba_mcp` adds an extra layer of command parsing and toolchain resolution that the client does not need.
-- Some GUI clients serialize arguments differently from a shell; using the binary with no args removes the most common failure mode completely.
-- Rebuilding after code changes is explicit: run `cargo build --bin mamba_mcp`, then reconnect the client to the same binary path.
-
-Codex-specific note:
-
-- The binary path is the preferred configuration even if `cargo run --bin mamba_mcp` works in a manual terminal.
-- Cargo launch in Codex remains valid only when each argv entry is separate:
-  - `run`
-  - `--bin`
-  - `mamba_mcp`
-- A single row containing `run --bin mamba_mcp` is wrong and Cargo treats it as an unknown subcommand.
-
-Generic stdio MCP client configuration with the recommended binary launch:
+### Generic stdio config (JSON)
 
 ```json
 {
@@ -120,115 +80,134 @@ Generic stdio MCP client configuration with the recommended binary launch:
 }
 ```
 
-Local terminal dev-only launch:
+### GUI client field mapping
 
-```bash
-export MAMBA_MCP_API_KEY="$MAMBA_API_KEY"
-./target/debug/mamba_mcp
-```
+| Field | Value |
+|---|---|
+| Command | Absolute path to built binary, e.g. `/absolute/path/to/mamba/target/debug/mamba_mcp` |
+| Arguments | Leave empty |
+| Environment | `MAMBA_MCP_API_URL=http://127.0.0.1:8787/mamba-api/v1` and `MAMBA_MCP_API_KEY=<same as MAMBA_API_KEY>` |
+| Working directory | Absolute repo root |
 
-Local shell development can rebuild and run in one command:
+### Codex note
+
+If using `cargo run` in Codex, each argument must be a separate argv entry: `run`, `--bin`, `mamba_mcp`. A single string `run --bin mamba_mcp` fails because Cargo treats it as an unknown subcommand.
+
+### Local development
 
 ```bash
 export MAMBA_MCP_API_KEY="$MAMBA_API_KEY"
 cargo run --bin mamba_mcp
 ```
 
-That Cargo form is convenient for local development, but the built binary is still the preferred client launcher for Codex and other GUI MCP tools.
+Client-specific setup recipes for Codex, Claude Code, Claude Desktop, Gemini CLI, and OpenClaw are in `docs/MCP_CLIENT_SETUP.md`.
 
-## Tool groups
+## Tool Reference
 
-Discovery and health:
+### Discovery
 
-- `api_docs`
-- `health`
-- `list_supported_markets`
+| Tool | Purpose |
+|---|---|
+| `api_docs` | Returns API documentation |
+| `health` | Health check for the backing API |
+| `list_supported_markets` | Lists all supported DEX markets |
 
-Market data and provenance:
+### Market Data
 
-- `list_tokens`
-- `get_token_details`
-- `batch_get_token_metadata`
-- `list_creators`
-- `list_creator_mints`
-- `list_transactions`
+| Tool | Purpose |
+|---|---|
+| `list_tokens` | Token discovery from the live websocket cache |
+| `get_token_details` | Single-mint route, creator, metadata, and liquidity info |
+| `batch_get_token_metadata` | Canonical metadata for multiple mints in one call |
+| `list_creators` | Creator discovery across tracked markets |
+| `list_creator_mints` | All mints launched by a specific creator |
+| `list_transactions` | Transaction history for a mint or wallet |
 
-Trade control:
+### Trade
 
-- `buy_token`
-- `sell_token`
+| Tool | Purpose |
+|---|---|
+| `buy_token` | Build or execute a buy transaction |
+| `sell_token` | Build or execute a sell transaction |
 
-Wallet control:
+### Wallet
 
-- `list_wallets`
-- `get_active_wallet`
-- `get_wallet_balance`
-- `create_wallet`
-- `select_wallets`
-- `transfer_asset`
-- `preview_wallet_clean`
-- `clean_wallet`
+| Tool | Purpose |
+|---|---|
+| `list_wallets` | Managed wallet list with labels and selection state |
+| `get_active_wallet` | Active wallet pubkey and live SOL balance |
+| `get_wallet_balance` | Balance for any wallet pubkey |
+| `create_wallet` | Generate a new managed wallet |
+| `select_wallets` | Change the active wallet selection |
+| `transfer_asset` | SOL or SPL token transfer (signed locally) |
+| `preview_wallet_clean` | Inspect reclaimable accounts before cleanup |
+| `clean_wallet` | Build or execute account cleanup |
 
-Create and pool control:
+### Create and Pool
 
-- `list_create_methods`
-- `list_raydium_launchpad_global_configs`
-- `list_raydium_launchpad_platform_configs`
-- `list_raydium_launchpad_platform_curve_params`
-- `create_token`
-- `list_pool_methods`
-- `create_pool`
-- `list_pool_positions`
-- `manage_pool_position`
+| Tool | Purpose |
+|---|---|
+| `list_create_methods` | Available token creation methods with `execute_generated_fields` |
+| `list_raydium_launchpad_global_configs` | Raydium Launchpad global configuration |
+| `list_raydium_launchpad_platform_configs` | Raydium Launchpad platform configurations |
+| `list_raydium_launchpad_platform_curve_params` | Raydium Launchpad curve parameters |
+| `create_token` | Build or execute token creation |
+| `list_pool_methods` | Available pool creation methods with `execute_generated_fields` |
+| `create_pool` | Build or execute pool creation |
+| `list_pool_positions` | Existing pool positions |
+| `manage_pool_position` | Withdraw from or manage an existing pool position |
 
-Subscription control:
+### Subscription
 
-- `subscribe_market`
-- `unsubscribe_market`
-- `list_subscriptions`
+| Tool | Purpose |
+|---|---|
+| `subscribe_market` | Start a websocket subscription for a market |
+| `unsubscribe_market` | Stop a market subscription |
+| `list_subscriptions` | List active subscriptions |
 
-Escape hatch:
+### Escape Hatch
 
-- `call_mamba_api`
-  - lets MCP clients call any authenticated Mamba API route before a dedicated MCP tool exists
-  - this keeps the MCP layer maintainable while the HTTP API evolves
+| Tool | Purpose |
+|---|---|
+| `call_mamba_api` | Call any authenticated API route directly. Use only when no dedicated tool exists. |
 
-## Selection rules
+## Tool Selection Rules
 
-Use these defaults so the agent picks one canonical tool per intent instead of guessing:
+When an agent needs to perform an action, use this table to pick the correct tool. Prefer dedicated tools over `call_mamba_api` in all cases.
 
-- Current wallet or live SOL balance: `get_active_wallet`
-- Arbitrary wallet pubkey balance: `get_wallet_balance`
-- Managed wallet list/labels/selection state: `list_wallets`
-- Broad token discovery from websocket cache: `subscribe_market`, then `list_tokens`
-- Single mint route/creator/metadata: `get_token_details`
-- Metadata for many mints: `batch_get_token_metadata`
-- Creator discovery: `list_creators`
-- Mints for one creator: `list_creator_mints`
-- Buy or sell planning/execution: `buy_token`, `sell_token`
-  - read `route.low_lq` from `get_token_details` first when the mint is unknown or route quality matters
-- Direct SOL or SPL transfer: `transfer_asset`
-- Cleanup inspection first: `preview_wallet_clean`
-- Cleanup build/execute after inspection: `clean_wallet`
-- Discover create methods first: `list_create_methods`
-- Raydium Launchpad create planning: `list_raydium_launchpad_global_configs`, `list_raydium_launchpad_platform_configs`, `list_raydium_launchpad_platform_curve_params`
-- Token create build/execute: `create_token`
-- Discover pool methods first: `list_pool_methods`
-- Existing pool positions: `list_pool_positions`
-- Pool withdrawal/management: `manage_pool_position`
-- Raw authenticated HTTP fallback only when no dedicated tool exists: `call_mamba_api`
+| Intent | Tool |
+|---|---|
+| Active wallet pubkey + SOL balance | `get_active_wallet` |
+| Balance for an arbitrary pubkey | `get_wallet_balance` |
+| Managed wallet list, labels, selection | `list_wallets` |
+| Broad token discovery | `subscribe_market`, then `list_tokens` |
+| Single-mint route, creator, metadata | `get_token_details` |
+| Metadata for many mints at once | `batch_get_token_metadata` |
+| Creator discovery | `list_creators` |
+| Mints by a specific creator | `list_creator_mints` |
+| Buy or sell (plan or execute) | `buy_token` / `sell_token` |
+| SOL or SPL transfer | `transfer_asset` |
+| Wallet cleanup inspection | `preview_wallet_clean` |
+| Wallet cleanup execution | `clean_wallet` |
+| Available token creation methods | `list_create_methods` |
+| Raydium Launchpad configs and curves | `list_raydium_launchpad_global_configs`, `list_raydium_launchpad_platform_configs`, `list_raydium_launchpad_platform_curve_params` |
+| Token creation | `create_token` |
+| Available pool creation methods | `list_pool_methods` |
+| View pool positions | `list_pool_positions` |
+| Pool withdrawal or management | `manage_pool_position` |
+| Raw HTTP fallback (no dedicated tool) | `call_mamba_api` |
 
-General safety rules:
+### Safety Defaults
 
-- Prefer dedicated tools over `call_mamba_api`.
-- Prefer read-only tools first, then build mode, then execute mode only when the user clearly wants submission.
-- Default `execute` to `false` for buy, sell, transfer, cleaner, create, pool-create, and pool-manage tasks unless the user clearly wants a live send.
-- If `get_token_details` reports `route.low_lq=true`, ask the user before a live buy/sell unless `AUTO_ACCEPT_LOW_LQ_POOLS=true`.
-- Do not fall back to `solana` CLI or host-installed packages for balances, route discovery, metadata lookup, or planning that Mamba already supports.
+- Default `execute` to `false` for buy, sell, transfer, cleaner, create, and pool operations unless the user explicitly requests a live send.
+- Prefer read-only tools first, then build mode, then execute mode.
+- If `get_token_details` reports `route.low_lq=true`, confirm with the user before a live buy/sell unless `AUTO_ACCEPT_LOW_LQ_POOLS=true`.
+- Check `route.low_lq` from `get_token_details` before trading any unfamiliar mint.
+- Do not fall back to `solana` CLI or host packages for operations that Mamba already supports.
 
-## Common patterns
+## Common Patterns
 
-List tokens from live websocket cache:
+### List tokens from websocket cache
 
 ```json
 {
@@ -240,7 +219,7 @@ List tokens from live websocket cache:
 }
 ```
 
-Read the active wallet and its live SOL balance directly from Mamba:
+### Check active wallet
 
 ```json
 {
@@ -249,7 +228,7 @@ Read the active wallet and its live SOL balance directly from Mamba:
 }
 ```
 
-Resolve canonical metadata for multiple mints without reimplementing lookup logic client-side:
+### Batch metadata lookup
 
 ```json
 {
@@ -260,7 +239,7 @@ Resolve canonical metadata for multiple mints without reimplementing lookup logi
 }
 ```
 
-Dry-run a buy without any signing:
+### Dry-run a buy (no signing)
 
 ```json
 {
@@ -275,18 +254,7 @@ Dry-run a buy without any signing:
 }
 ```
 
-Low-LQ execution behavior:
-
-- `get_token_details` now exposes `route.low_lq` and route liquidity fields directly from the API.
-- `buy_token` and `sell_token` accept `skip_low_lq_pools`.
-- When `AUTO_ACCEPT_LOW_LQ_POOLS=false`, execute calls default to `skip_low_lq_pools=true` unless the caller explicitly sets `skip_low_lq_pools=false` after the user confirms they want the low-LQ route anyway.
-
-Swap fee override arguments accepted by both `buy_token` and `sell_token`:
-
-- `priority_fee_level`: `env`, `low`, `medium`, `high`, `turbo`, `max`, or `custom`
-- `priority_fee_sol`: decimal SOL amount, used only with `priority_fee_level="custom"`
-
-Example custom-fee sell:
+### Execute a sell with custom priority fee
 
 ```json
 {
@@ -302,7 +270,7 @@ Example custom-fee sell:
 }
 ```
 
-Execute a transfer where Mamba signs locally:
+### Transfer SOL
 
 ```json
 {
@@ -317,7 +285,9 @@ Execute a transfer where Mamba signs locally:
 }
 ```
 
-Create a token while letting Mamba generate the mint signer internally:
+### Create a token
+
+Mamba generates the mint signer internally.
 
 ```json
 {
@@ -335,16 +305,35 @@ Create a token while letting Mamba generate the mint signer internally:
 }
 ```
 
-## Devnet and mainnet
+## Priority Fee Overrides
 
-- Devnet live validation is supported and is the recommended place to test execute flows.
-- Mainnet dry runs are supported through the same tools with `execute=false`.
-- Mainnet live sends stay controlled by the underlying API safety gates; enabling the MCP server alone does not unlock them.
-- Execute calls cannot redirect a devnet-configured API into mainnet by passing a different `rpc_url`; the backing API rejects cross-cluster live sends.
+Both `buy_token` and `sell_token` accept fee override arguments.
 
-## Maintenance notes
+| Parameter | Values | Notes |
+|---|---|---|
+| `priority_fee_level` | `env`, `low`, `medium`, `high`, `turbo`, `max`, `custom` | Controls compute-unit price tier |
+| `priority_fee_sol` | Decimal SOL amount | Used only when `priority_fee_level` is `custom` |
 
-- Dedicated MCP tools are thin wrappers around the HTTP API so behavior stays centralized in `mamba_api`.
-- The raw `call_mamba_api` tool prevents MCP drift when a new API route is added before a dedicated wrapper lands.
-- Most execute tools map 1:1 to existing API request and response bodies, which keeps docs, tests, and clients aligned.
-- `list_create_methods` and `list_pool_methods` expose `execute_generated_fields` so MCP clients can tell which signer inputs Mamba may generate internally during execute mode.
+## Low-Liquidity Pool Handling
+
+- `get_token_details` exposes `route.low_lq` and route liquidity fields.
+- `buy_token` and `sell_token` accept `skip_low_lq_pools`.
+- When `AUTO_ACCEPT_LOW_LQ_POOLS=false` (the default), execute calls set `skip_low_lq_pools=true` automatically. The caller must explicitly pass `skip_low_lq_pools=false` after user confirmation to trade on low-LQ routes.
+
+## Devnet and Mainnet
+
+| Scenario | Supported | Notes |
+|---|---|---|
+| Devnet live execution | Yes | Recommended for testing execute flows |
+| Mainnet dry runs | Yes | Use `execute=false` on any tool |
+| Mainnet live sends | Yes | Controlled by `mamba_api` safety gates, not by MCP |
+| Cross-cluster redirect | No | Execute calls cannot redirect a devnet API to mainnet via `rpc_url` |
+
+Enabling the MCP server alone does not unlock mainnet live sends. The backing API must have `MAMBA_API_ENABLE_LIVE_SENDS=true` independently.
+
+## Maintenance Notes
+
+- MCP tools are thin wrappers around the HTTP API. Behavior stays centralized in `mamba_api`.
+- `call_mamba_api` prevents MCP drift when new API routes land before dedicated wrappers are added.
+- Most execute tools map 1:1 to existing API request/response bodies, keeping docs, tests, and clients aligned.
+- `list_create_methods` and `list_pool_methods` expose `execute_generated_fields` so MCP clients can determine which signer inputs Mamba generates internally during execute mode.

@@ -1,43 +1,42 @@
 # MCP Client Setup
 
-This page covers the current install path for Mamba's stdio MCP server across common agent clients:
-
-- Codex
-- Claude Code
-- Claude Desktop
-- Gemini CLI
-- OpenClaw
-- any generic stdio MCP client
+Connect any MCP-capable agent to Mamba's local Solana DEX toolkit. The `mamba_mcp` binary is a stdio-based bridge that forwards tool calls to `mamba_api` over HTTP on your machine. Private keys never leave `mamba_api`.
 
 ## Prerequisites
 
-Start the authenticated API first:
+**1. Start the API**
 
 ```bash
-cp .env.example .env
+cp .env.example .env   # set MAMBA_API_KEY and other values
 cargo run --bin mamba_api
 ```
 
-Build the MCP binary:
+**2. Build the MCP binary**
 
 ```bash
 cargo build --bin mamba_mcp
 ```
 
-Canonical MCP environment values:
+The built binary lives at `target/debug/mamba_mcp` (or `target/release/mamba_mcp` with `--release`). Use the binary path in all client configs below, not `cargo run`.
 
-- `MAMBA_MCP_API_URL=http://127.0.0.1:8787/mamba-api/v1`
-- `MAMBA_MCP_API_KEY=<same value as MAMBA_API_KEY>`
+**3. Note the environment variables**
 
-Snippet generator for the current checkout:
+| Variable | Value |
+|---|---|
+| `MAMBA_MCP_API_URL` | `http://127.0.0.1:8787/mamba-api/v1` |
+| `MAMBA_MCP_API_KEY` | Same value as `MAMBA_API_KEY` in your `.env` |
+
+To auto-generate config snippets for your current checkout:
 
 ```bash
 ./scripts/print_mamba_mcp_configs.sh
 ```
 
+---
+
 ## Codex
 
-Codex CLI supports local stdio MCP servers directly. Use the built binary path:
+Register a local stdio server with `codex mcp add`:
 
 ```bash
 codex mcp add mamba \
@@ -46,31 +45,30 @@ codex mcp add mamba \
   -- /absolute/path/to/mamba/target/debug/mamba_mcp
 ```
 
-Verify it:
+Verify the registration:
 
 ```bash
 codex mcp list
 ```
 
+---
+
 ## Claude Code
 
-Use Claude Code's JSON-based stdio registration:
+Claude Code uses JSON-based stdio registration:
 
 ```bash
 claude mcp add-json mamba \
   '{"type":"stdio","command":"/absolute/path/to/mamba/target/debug/mamba_mcp","args":[],"env":{"MAMBA_MCP_API_URL":"http://127.0.0.1:8787/mamba-api/v1","MAMBA_MCP_API_KEY":"'"$MAMBA_API_KEY"'"}}'
 ```
 
-Project-file variant: `.mcp.json` with the same `mcpServers.mamba` object.
+You can also add a `.mcp.json` file at the project root with the same `mcpServers.mamba` object for per-project configuration.
+
+---
 
 ## Claude Desktop
 
-There are two viable paths:
-
-1. Current direct local setup: add a local stdio server entry to `claude_desktop_config.json`.
-2. Future one-click setup: ship a `.mcpb` bundle and install it through `Settings > Extensions > Install Extension...`.
-
-Current local stdio config fragment:
+Add a local stdio server entry to `claude_desktop_config.json`:
 
 ```json
 {
@@ -87,9 +85,13 @@ Current local stdio config fragment:
 }
 ```
 
+A future option is one-click install via a `.mcpb` bundle through **Settings > Extensions > Install Extension**.
+
+---
+
 ## Gemini CLI
 
-Gemini CLI can add stdio servers from the shell:
+Add the server from your shell:
 
 ```bash
 gemini mcp add \
@@ -98,30 +100,34 @@ gemini mcp add \
   mamba /absolute/path/to/mamba/target/debug/mamba_mcp
 ```
 
-Verify it:
+Verify the registration:
 
 ```bash
 gemini mcp list
 ```
 
+---
+
 ## OpenClaw
 
-OpenClaw stores MCP server definitions in its own config registry:
+OpenClaw stores server definitions in its own config registry:
 
 ```bash
 openclaw mcp set mamba \
   '{"command":"/absolute/path/to/mamba/target/debug/mamba_mcp","args":[],"env":{"MAMBA_MCP_API_URL":"http://127.0.0.1:8787/mamba-api/v1","MAMBA_MCP_API_KEY":"change_me"}}'
 ```
 
-Inspect it:
+Inspect the stored config:
 
 ```bash
 openclaw mcp show mamba --json
 ```
 
-## Generic stdio MCP clients
+---
 
-Clients that accept a plain stdio server object can use this shape:
+## Generic stdio Clients
+
+Any client that accepts a standard stdio server object can use this shape:
 
 ```json
 {
@@ -138,8 +144,10 @@ Clients that accept a plain stdio server object can use this shape:
 }
 ```
 
+---
+
 ## Notes
 
-- Use the built binary path, not `cargo run --bin mamba_mcp`, for client integrations.
-- Keep signing in `mamba_api`; the MCP server never returns private keys.
-- The local MCP bridge is stdio-based today. Clients that only support remote MCP require a future hosted surface rather than the local binary.
+- Always point clients at the **built binary** (`target/debug/mamba_mcp`), not at `cargo run --bin mamba_mcp`.
+- All signing stays in `mamba_api`. The MCP bridge never handles or returns private keys.
+- The bridge is stdio-based. Clients that require a remote HTTP transport will need a future hosted surface instead of the local binary.
