@@ -80,7 +80,7 @@ curl -sS \
 - Press `r` to refresh previews.
 - `Enter` on `BUILD` produces bundles. `SEND` is available only when live sending is intentionally enabled for the local wallet flow.
 
-![Cleaner screen](../images/mamba_cleaner.svg){ .screenshot-frame }
+![Mamba](../images/mamba_text_1280_640.png){ .screenshot-frame }
 
 ## Safety notes
 

@@ -1416,6 +1416,42 @@ fn parse_ui_amount_to_raw(raw: &str, decimals: u8, label: &str) -> Result<u64, A
     Ok(raw_val)
 }
 
+fn build_meteora_dlmm_customizable_params(
+    active_id: i32,
+    bin_step: u16,
+    base_factor: u16,
+    activation_type: u8,
+    has_alpha_vault: bool,
+    activation_point: Option<u64>,
+    creator_pool_on_off_control: bool,
+    base_fee_power_factor: u8,
+) -> Result<dlmm_idl::CustomizableParams, ApiError> {
+    let mut data = Vec::with_capacity(82);
+    data.extend_from_slice(&active_id.to_le_bytes());
+    data.extend_from_slice(&bin_step.to_le_bytes());
+    data.extend_from_slice(&base_factor.to_le_bytes());
+    data.push(activation_type);
+    data.push(u8::from(has_alpha_vault));
+    match activation_point {
+        Some(value) => {
+            data.push(1);
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        None => data.push(0),
+    }
+    data.push(u8::from(creator_pool_on_off_control));
+    data.push(base_fee_power_factor);
+    data.extend_from_slice(&[0u8; 62]);
+
+    <dlmm_idl::CustomizableParams as anchor_lang::AnchorDeserialize>::try_from_slice(&data).map_err(
+        |error| {
+            ApiError::internal(format!(
+                "failed to build meteora dlmm customizable params: {error}"
+            ))
+        },
+    )
+}
+
 async fn resolve_pool_rpc(
     state: &ApiState,
     base_offset: usize,
@@ -3129,17 +3165,16 @@ async fn build_pool_response(
 
             let bin_array_bitmap_extension = METEORA_DLMM_ID; // SDK uses program-id placeholder
 
-            let params = dlmm_idl::CustomizableParams {
+            let params = build_meteora_dlmm_customizable_params(
                 active_id,
                 bin_step,
                 base_factor,
                 activation_type,
-                activation_point,
                 has_alpha_vault,
-                base_fee_power_factor,
+                activation_point,
                 creator_pool_on_off_control,
-                padding: [0u8; 62],
-            };
+                base_fee_power_factor,
+            )?;
 
             let mut planned = plan_meteora_dlmm_create_pool(
                 MeteoraDlmmCreatePoolPlan {
@@ -3956,8 +3991,8 @@ fn parse_priority_fee_level(raw: &str) -> Option<PriorityFeeLevel> {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_methods, is_rate_limited_pool_positions_error, is_retryable_pool_positions_error,
-        parse_ui_amount_to_raw,
+        build_meteora_dlmm_customizable_params, get_methods, is_rate_limited_pool_positions_error,
+        is_retryable_pool_positions_error, parse_ui_amount_to_raw,
     };
 
     #[test]
@@ -4005,6 +4040,46 @@ mod tests {
         assert!(!is_rate_limited_pool_positions_error(
             "invalid owner pubkey: bad base58"
         ));
+    }
+
+    #[test]
+    fn test_build_meteora_dlmm_customizable_params_serializes_canonical_layout() {
+        let params = build_meteora_dlmm_customizable_params(
+            -42,
+            25,
+            10_000,
+            1,
+            true,
+            Some(123_456),
+            false,
+            0,
+        )
+        .expect("customizable params");
+        let mut serialized = Vec::new();
+        anchor_lang::AnchorSerialize::serialize(&params, &mut serialized)
+            .expect("customizable params should serialize");
+
+        let mut expected_prefix = Vec::new();
+        expected_prefix.extend_from_slice(&(-42i32).to_le_bytes());
+        expected_prefix.extend_from_slice(&25u16.to_le_bytes());
+        expected_prefix.extend_from_slice(&10_000u16.to_le_bytes());
+        expected_prefix.push(1);
+        expected_prefix.push(1);
+        expected_prefix.push(1);
+        expected_prefix.extend_from_slice(&123_456u64.to_le_bytes());
+        expected_prefix.push(0);
+        expected_prefix.push(0);
+
+        assert_eq!(serialized.len(), 83);
+        assert_eq!(
+            &serialized[..expected_prefix.len()],
+            expected_prefix.as_slice()
+        );
+        assert!(
+            serialized[expected_prefix.len()..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 # Mamba
 
 <div class="home-hero">
+  <img class="home-hero-brand" src="images/mamba_text_1280_640.png" alt="Mamba">
   <div class="eyebrow">SOLANA RUST DEV KIT</div>
   <h1>Find the pool. Build the tx. Send with intent.</h1>
   <p>Mamba is a Solana Rust kit for sniffing markets, streaming websockets, building swaps and launches, and running wallet ops. Runtime surfaces: Local API, terminal app, and MCP bridge. Signing stays local; receipts stay inspectable.</p>

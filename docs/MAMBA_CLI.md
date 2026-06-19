@@ -2,6 +2,8 @@
 
 `mamba` is the terminal application for Create, Swap, Dash, Pools, Wallet, Cleaner, and MEV or SWQoS setup.
 
+![Mamba](images/mamba_text_1280_640.png){ .screenshot-frame }
+
 ## Main menu
 
 The current main menu is:
@@ -16,13 +18,9 @@ The current main menu is:
 8. Help
 9. Quit
 
-![Mamba menu](images/mamba_menu.svg){ .screenshot-frame }
-
 ## Cleaner screen
 
 The cleaner is part of the main menu rather than a hidden workflow. It previews reclaimable token accounts, reports recoverable SOL, and supports build or send cleanup batches for selected wallets.
-
-![Mamba cleaner](images/mamba_cleaner.svg){ .screenshot-frame }
 
 ## Quickstart
 

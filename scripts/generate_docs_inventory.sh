@@ -13,7 +13,10 @@ fi
 mapfile -t REPO_PATHS < <(
   cd "${ROOT}" &&
     git ls-files --cached --others --exclude-standard \
-      | "${exclude_capture_cmd[@]}"
+      | "${exclude_capture_cmd[@]}" \
+      | while IFS= read -r path; do
+          [[ -e "${path}" ]] && printf '%s\n' "${path}"
+        done
 ) || true
 
 mapfile -t REPO_GROUPS < <(

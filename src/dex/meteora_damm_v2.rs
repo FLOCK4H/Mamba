@@ -291,6 +291,10 @@ impl MeteoraDammV2 {
         normalized.clamp(0.01, 0.99)
     }
 
+    fn buy_use_idempotent(use_idempotent: Option<bool>) -> bool {
+        use_idempotent.unwrap_or(true)
+    }
+
     fn pool_account_filters_for_mint(offset: usize, mint: &Pubkey) -> Vec<RpcFilterType> {
         vec![
             RpcFilterType::DataSize(DAMM_V2_POOL_ACCOUNT_LEN as u64),
@@ -1371,7 +1375,7 @@ impl MeteoraDammV2 {
         let input_ata = Self::ata_for(&buyer, &WSOL_MINT, &input_program);
         let output_ata = Self::ata_for(&buyer, mint, &output_program);
 
-        let use_idempotent = use_idempotent.unwrap_or(false);
+        let use_idempotent = Self::buy_use_idempotent(use_idempotent);
         let mut ixs = Vec::new();
         if use_idempotent {
             ixs.push(create_associated_token_account_idempotent(
@@ -1778,6 +1782,13 @@ mod tests {
         assert_eq!(MeteoraDammV2::normalize_slippage(15.0), 0.15);
         assert_eq!(MeteoraDammV2::normalize_slippage(0.0), 0.01);
         assert_eq!(MeteoraDammV2::normalize_slippage(150.0), 0.99);
+    }
+
+    #[test]
+    fn test_meteora_damm_v2_buy_defaults_to_idempotent_ata_creation() {
+        assert!(MeteoraDammV2::buy_use_idempotent(None));
+        assert!(MeteoraDammV2::buy_use_idempotent(Some(true)));
+        assert!(!MeteoraDammV2::buy_use_idempotent(Some(false)));
     }
 
     #[test]

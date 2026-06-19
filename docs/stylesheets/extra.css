@@ -59,20 +59,18 @@ button {
   box-shadow: 0 24px 72px rgba(11, 18, 32, 0.22);
 }
 
-.home-hero::after {
-  position: absolute;
-  inset: auto -5rem -7rem auto;
-  width: 16rem;
-  height: 16rem;
-  border-radius: 50%;
-  background: rgba(251, 133, 0, 0.12);
-  content: "";
-}
-
 .home-hero h1,
 .home-hero p {
   position: relative;
   color: inherit;
+}
+
+.home-hero-brand {
+  position: relative;
+  display: block;
+  width: min(100%, 32rem);
+  height: auto;
+  margin: -0.65rem 0 0.2rem;
 }
 
 .eyebrow {

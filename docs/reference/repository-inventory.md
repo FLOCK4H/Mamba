@@ -4,8 +4,8 @@ Repository paths indexed from `git ls-files --cached --others --exclude-standard
 
 ## Coverage
 
-- Indexed paths: 116
-- Generated at: 2026-05-05 17:45:00 UTC
+- Indexed paths: 111
+- Generated at: 2026-06-19 15:19:30 UTC
 - Inventory source: `git ls-files --cached --others --exclude-standard`
 - Ignored paths excluded through `.gitignore` (for example `target/`, `.venv-docs/`, `.env`, `docs-site/`, `PACKAGING.md`, and synced `external/upstreams/` mirrors)
 - Additional local-only exclusion: `Capture.PNG`
@@ -16,7 +16,7 @@ Repository paths indexed from `git ls-files --cached --others --exclude-standard
 | --- | ---: |
 | repository root | 9 |
 | `.github/` | 1 |
-| `docs/` | 22 |
+| `docs/` | 17 |
 | `external/` | 14 |
 | `scripts/` | 7 |
 | `src/` | 62 |
@@ -56,9 +56,11 @@ rust-toolchain.toml
 
 ### `docs/`
 
-<details><summary>Show indexed paths (22)</summary>
+<details><summary>Show indexed paths (17)</summary>
 
 ```text
+docs/images/mamba_500_500.png
+docs/images/mamba_text_1280_640.png
 docs/MAMBA_API.md
 docs/MAMBA_CLI.md
 docs/MAMBA_CREATE.md
@@ -66,13 +68,6 @@ docs/MAMBA_MCP.md
 docs/MCP_CLIENT_SETUP.md
 docs/architecture.md
 docs/features/wallet-cleaner.md
-docs/images/mamba_cleaner.svg
-docs/images/mamba_create.svg
-docs/images/mamba_loading.svg
-docs/images/mamba_icon.png
-docs/images/mamba_menu.svg
-docs/images/mamba_monitor.svg
-docs/images/mamba_trade.svg
 docs/index.md
 docs/markets.md
 docs/quickstart.md

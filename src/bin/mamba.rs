@@ -17673,18 +17673,12 @@ fn draw_mev_setup(f: &mut ratatui::Frame<'_>, ui: &UiState, app: &AppState) {
         Line::from(""),
         Line::from(vec![
             prefix(MevSetupField::Save),
+            Span::styled("[SAVE]", label_style(MevSetupField::Save)),
+            Span::raw(" "),
+            prefix(MevSetupField::Cancel),
             Span::styled(
-                format!("[SAVE] [{cancel_label}]"),
-                if matches!(
-                    ui.mev_setup.field,
-                    MevSetupField::Save | MevSetupField::Cancel
-                ) {
-                    Style::default()
-                        .fg(UI_HIGHLIGHT)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                },
+                format!("[{cancel_label}]"),
+                label_style(MevSetupField::Cancel),
             ),
         ]),
         Line::from(Span::styled(
@@ -17698,7 +17692,7 @@ fn draw_mev_setup(f: &mut ratatui::Frame<'_>, ui: &UiState, app: &AppState) {
             Style::default().fg(UI_DIM),
         )),
         Line::from(Span::styled(
-            "Tab/Shift+Tab navigate, Enter saves, Esc returns, F4 reopens later.",
+            "Tab/Shift+Tab navigate, Enter selects, Esc returns, F4 reopens later.",
             Style::default().fg(UI_DIM),
         )),
     ];
@@ -22068,7 +22062,10 @@ fn mev_setup_click_targets(area: Rect, ui: &UiState) -> Vec<MevSetupClickTarget>
     };
     targets.push(MevSetupClickTarget {
         rect: Rect {
-            x: save_x.saturating_add(save_width).saturating_add(1),
+            x: save_x
+                .saturating_add(save_width)
+                .saturating_add(1)
+                .saturating_add(text_width_u16("  ")),
             y: buttons_y,
             width: text_width_u16(cancel_label),
             height: 1,

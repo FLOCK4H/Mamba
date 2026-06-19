@@ -1,7 +1,9 @@
 # Mamba
 
-<p>
-  <img src="docs/images/mamba_icon.png" width="96" alt="Mamba icon">
+<p align="center">
+  <img src="docs/images/mamba_500_500.png" width="96" alt="Mamba icon">
+  <br>
+  <img src="docs/images/mamba_text_1280_640.png" width="640" alt="Mamba">
 </p>
 
 [![Docs](https://github.com/FLOCK4H/Mamba/actions/workflows/docs.yml/badge.svg?event=push)](https://github.com/FLOCK4H/Mamba/actions/workflows/docs.yml)

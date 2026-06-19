@@ -111,7 +111,7 @@ pub const DEFAULT_MARKET_PRIORITY: [Market; 10] = [
     Market::MeteoraDlmm,
 ];
 
-const DEFAULT_MARKET_PRIMARY_LOOKUP: [Market; 8] = [
+const DEFAULT_MARKET_PRIMARY_LOOKUP: [Market; 9] = [
     Market::PumpSwap,
     Market::PumpFun,
     Market::RaydiumAmmV4,
@@ -120,9 +120,11 @@ const DEFAULT_MARKET_PRIMARY_LOOKUP: [Market; 8] = [
     Market::MeteoraDammV1,
     Market::MeteoraDammV2,
     Market::MeteoraDbc,
+    Market::MeteoraDlmm,
 ];
 
-const DEFAULT_MARKET_DEFERRED_LOOKUP: [Market; 2] = [Market::RaydiumClmm, Market::MeteoraDlmm];
+const DEFAULT_MARKET_DEFERRED_LOOKUP: [Market; 1] = [Market::RaydiumClmm];
+const LAST_RESORT_LOOKUP_MARKETS: [Market; 1] = [Market::MeteoraDlmm];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MintPoolRoute {
@@ -218,6 +220,7 @@ impl Swaps {
     const ROUTE_LOOKUP_TIMEOUT_ENV: &'static str = "MAMBA_ROUTE_LOOKUP_TIMEOUT_SECS";
     const METADATA_CREATOR_LOOKUP_TIMEOUT_MS: u64 = 500;
     const ROUTE_PREFERENCE_LOOKUP_TIMEOUT_CAP_SECS: u64 = 3;
+    const ROUTE_LIQUIDITY_LOOKUP_TIMEOUT_CAP_SECS: u64 = 5;
     const BUY_CAPACITY_SAFETY_MARGIN_BPS: u64 = 9_000;
     const LOW_LQ_WSOL_THRESHOLD_RAW: u64 = 10_000_000_000;
     const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
@@ -308,6 +311,26 @@ impl Swaps {
         DEFAULT_MARKET_DEFERRED_LOOKUP.contains(&market)
     }
 
+    fn is_last_resort_lookup_market(market: Market) -> bool {
+        LAST_RESORT_LOOKUP_MARKETS.contains(&market)
+    }
+
+    fn buy_needs_shared_wsol_cleanup(market: Market) -> bool {
+        !matches!(market, Market::PumpFun)
+    }
+
+    fn update_best_measured_candidate(
+        best: &mut Option<MeasuredRouteCandidate>,
+        candidate: MeasuredRouteCandidate,
+    ) {
+        if best
+            .as_ref()
+            .is_none_or(|current| Self::better_candidate(&candidate, current))
+        {
+            *best = Some(candidate);
+        }
+    }
+
     fn market_lookup_groups_for_priority(markets: &[Market]) -> Vec<Vec<Market>> {
         let mut primary = Vec::new();
         let mut deferred = Vec::new();
@@ -363,6 +386,16 @@ impl Swaps {
         ))
     }
 
+    fn allocate_route_liquidity_lookup_timeout(deadline: Instant) -> Duration {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return remaining;
+        }
+        remaining.min(Duration::from_secs(
+            Self::ROUTE_LIQUIDITY_LOOKUP_TIMEOUT_CAP_SECS,
+        ))
+    }
+
     fn prioritize_markets(markets: &[Market], preferred: &[Market]) -> Vec<Market> {
         let mut ordered = Vec::with_capacity(markets.len());
         for market in preferred.iter().copied() {
@@ -384,7 +417,12 @@ impl Swaps {
     ) -> Vec<Market> {
         let normalized = mint.trim().to_ascii_lowercase();
         let preferred = if normalized.ends_with("pump") {
-            vec![Market::PumpSwap, Market::PumpFun]
+            vec![
+                Market::RaydiumAmmV4,
+                Market::RaydiumCpmm,
+                Market::PumpSwap,
+                Market::PumpFun,
+            ]
         } else if normalized.ends_with("bags") {
             vec![
                 Market::MeteoraDammV2,
@@ -1286,28 +1324,40 @@ impl Swaps {
         &self,
         mint: &Pubkey,
         candidates: &[(Market, Pubkey)],
-        preferred_markets: &[Market],
+        candidate_filter_markets: Option<&[Market]>,
+        measurement_timeout: Duration,
     ) -> Vec<MeasuredRouteCandidate> {
-        let eligible_candidates = if preferred_markets.is_empty() {
-            candidates.to_vec()
-        } else {
+        let eligible_candidates = if let Some(candidate_filter_markets) =
+            candidate_filter_markets.filter(|markets| !markets.is_empty())
+        {
             let preferred_only = candidates
                 .iter()
                 .copied()
-                .filter(|(market, _)| preferred_markets.contains(market))
+                .filter(|(market, _)| candidate_filter_markets.contains(market))
                 .collect::<Vec<_>>();
             if preferred_only.is_empty() {
                 candidates.to_vec()
             } else {
                 preferred_only
             }
+        } else {
+            candidates.to_vec()
         };
 
         let measured = join_all(eligible_candidates.iter().copied().map(
             |(market, pool)| async move {
-                let liquidity = self
-                    .fetch_market_liquidity_snapshot(market, &pool, mint)
-                    .await;
+                let liquidity = match tokio::time::timeout(
+                    measurement_timeout,
+                    self.fetch_market_liquidity_snapshot(market, &pool, mint),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err(anyhow::anyhow!(
+                        "route liquidity measurement timed out after {}ms",
+                        measurement_timeout.as_millis()
+                    )),
+                };
                 (market, pool, liquidity)
             },
         ))
@@ -1318,6 +1368,9 @@ impl Swaps {
             let liquidity = match liquidity {
                 Ok(liquidity) => liquidity,
                 Err(error) => {
+                    let timed_out = error
+                        .to_string()
+                        .contains("route liquidity measurement timed out");
                     warn!(
                         "failed to measure route liquidity for market {} pool {} mint {}: {}",
                         market.as_str(),
@@ -1326,10 +1379,19 @@ impl Swaps {
                         error
                     );
                     RouteLiquiditySnapshot {
-                        wsol_liquidity_raw: self
-                            .fetch_market_wsol_liquidity_raw(market, &pool)
+                        wsol_liquidity_raw: if timed_out {
+                            0
+                        } else {
+                            match tokio::time::timeout(
+                                measurement_timeout,
+                                self.fetch_market_wsol_liquidity_raw(market, &pool),
+                            )
                             .await
-                            .unwrap_or(0),
+                            {
+                                Ok(Ok(value)) => value,
+                                _ => 0,
+                            }
+                        },
                         max_safe_buy_sol_raw: 0,
                     }
                 }
@@ -1593,32 +1655,51 @@ impl Swaps {
         let mint = Self::parse_pubkey_input("mint", mint)?;
         let quote_mint =
             Self::parse_optional_pubkey_input("quote_mint", quote_mint.map(|v| v.as_str()))?;
-        let requested_markets = market_priority
+        let mut requested_markets = market_priority
             .map(|markets| markets.to_vec())
             .unwrap_or_else(|| Self::default_market_priority().to_vec());
-        let deadline =
-            Instant::now() + Self::route_lookup_timeout_duration(Some(&requested_markets));
         let explicit_single_market = market_priority.is_some_and(|markets| markets.len() <= 1);
-        let preferred_markets = if explicit_single_market {
+        let family_markets = if explicit_single_market {
             Vec::new()
         } else {
-            let family_markets =
-                Self::preferred_route_markets_from_mint_family(&mint_literal, &requested_markets);
-            if family_markets.is_empty() {
-                self.detect_preferred_route_markets_before_deadline(
+            Self::preferred_route_markets_from_mint_family(&mint_literal, &requested_markets)
+        };
+        if !family_markets.is_empty() {
+            let scoped_markets = requested_markets
+                .iter()
+                .copied()
+                .filter(|market| family_markets.contains(market))
+                .collect::<Vec<_>>();
+            if !scoped_markets.is_empty() {
+                requested_markets = scoped_markets;
+            }
+        }
+        let deadline =
+            Instant::now() + Self::route_lookup_timeout_duration(Some(&requested_markets));
+        let mut restrict_candidates_to_preferred_markets = false;
+        let preferred_markets = if explicit_single_market {
+            Vec::new()
+        } else if !family_markets.is_empty() {
+            family_markets
+        } else {
+            let detected_markets = self
+                .detect_preferred_route_markets_before_deadline(
                     &mint,
                     quote_mint.as_ref(),
                     deadline,
                 )
-                .await
-            } else {
-                family_markets
-            }
+                .await;
+            restrict_candidates_to_preferred_markets = !detected_markets.is_empty();
+            detected_markets
         };
         let ordered_markets = Self::prioritize_markets(&requested_markets, &preferred_markets);
         let market_groups = Self::market_lookup_groups_for_priority(&ordered_markets);
         let mut best_relaxed_candidate: Option<MeasuredRouteCandidate> = None;
-        let mut best_low_lq_candidate: Option<MeasuredRouteCandidate> = None;
+        let mut best_last_resort_candidate: Option<MeasuredRouteCandidate> = None;
+        let mut best_last_resort_low_lq_candidate: Option<MeasuredRouteCandidate> = None;
+        let mut best_last_resort_relaxed_candidate: Option<MeasuredRouteCandidate> = None;
+        let candidate_filter_markets =
+            restrict_candidates_to_preferred_markets.then_some(preferred_markets.as_slice());
 
         for (group_idx, markets) in market_groups.iter().enumerate() {
             let group_timeout = Self::allocate_group_route_lookup_timeout(
@@ -1668,14 +1749,71 @@ impl Swaps {
                 continue;
             }
 
+            let measurement_timeout = Self::allocate_route_liquidity_lookup_timeout(deadline);
+            if measurement_timeout.is_zero() {
+                break;
+            }
             let measured = self
-                .measure_market_candidates(&mint, &candidates, &preferred_markets)
+                .measure_market_candidates(
+                    &mint,
+                    &candidates,
+                    candidate_filter_markets,
+                    measurement_timeout,
+                )
                 .await;
             if measured.is_empty() {
                 continue;
             }
 
-            let matching = measured
+            let mut standard_measured = Vec::new();
+            let mut last_resort_measured = Vec::new();
+            for candidate in measured {
+                if ordered_markets.len() > 1 && Self::is_last_resort_lookup_market(candidate.market)
+                {
+                    last_resort_measured.push(candidate);
+                } else {
+                    standard_measured.push(candidate);
+                }
+            }
+
+            if !last_resort_measured.is_empty() {
+                let matching = last_resort_measured
+                    .iter()
+                    .copied()
+                    .filter(|candidate| {
+                        Self::candidate_capacity_raw(&candidate.liquidity) >= min_liquidity_raw
+                    })
+                    .collect::<Vec<_>>();
+                let matching_without_low_lq = matching
+                    .iter()
+                    .copied()
+                    .filter(|candidate| {
+                        !Self::route_is_low_lq(candidate.market, &candidate.liquidity)
+                    })
+                    .collect::<Vec<_>>();
+
+                if let Some(best) = Self::choose_best_measured_candidate(&matching_without_low_lq) {
+                    Self::update_best_measured_candidate(&mut best_last_resort_candidate, best);
+                } else if let Some(low_lq) = Self::choose_best_measured_candidate(&matching) {
+                    Self::update_best_measured_candidate(
+                        &mut best_last_resort_low_lq_candidate,
+                        low_lq,
+                    );
+                } else if let Some(relaxed) =
+                    Self::choose_best_measured_candidate(&last_resort_measured)
+                {
+                    Self::update_best_measured_candidate(
+                        &mut best_last_resort_relaxed_candidate,
+                        relaxed,
+                    );
+                }
+            }
+
+            if standard_measured.is_empty() {
+                continue;
+            }
+
+            let matching = standard_measured
                 .iter()
                 .copied()
                 .filter(|candidate| {
@@ -1704,38 +1842,23 @@ impl Swaps {
             }
 
             if let Some(low_lq_candidate) = Self::choose_best_measured_candidate(&matching) {
-                if best_low_lq_candidate
-                    .as_ref()
-                    .is_none_or(|current| Self::better_candidate(&low_lq_candidate, current))
-                {
-                    best_low_lq_candidate = Some(low_lq_candidate);
-                }
-                continue;
+                return Ok(Some(
+                    self.build_creator_route_selection(
+                        &mint,
+                        low_lq_candidate.market,
+                        low_lq_candidate.pool,
+                        low_lq_candidate.liquidity,
+                        None,
+                        prefer_metadata_creator_first,
+                    )
+                    .await?,
+                ));
             }
 
-            let Some(relaxed) = Self::choose_best_measured_candidate(&measured) else {
+            let Some(relaxed) = Self::choose_best_measured_candidate(&standard_measured) else {
                 continue;
             };
-            if best_relaxed_candidate
-                .as_ref()
-                .is_none_or(|current| Self::better_candidate(&relaxed, current))
-            {
-                best_relaxed_candidate = Some(relaxed);
-            }
-        }
-
-        if let Some(low_lq) = best_low_lq_candidate {
-            return Ok(Some(
-                self.build_creator_route_selection(
-                    &mint,
-                    low_lq.market,
-                    low_lq.pool,
-                    low_lq.liquidity,
-                    None,
-                    prefer_metadata_creator_first,
-                )
-                .await?,
-            ));
+            Self::update_best_measured_candidate(&mut best_relaxed_candidate, relaxed);
         }
 
         if let Some(relaxed) = best_relaxed_candidate {
@@ -1748,6 +1871,52 @@ impl Swaps {
                     Some(Self::relaxed_liquidity_warning(
                         &mint,
                         &relaxed,
+                        min_liquidity_raw,
+                    )),
+                    prefer_metadata_creator_first,
+                )
+                .await?,
+            ));
+        }
+
+        if let Some(last_resort) = best_last_resort_candidate {
+            return Ok(Some(
+                self.build_creator_route_selection(
+                    &mint,
+                    last_resort.market,
+                    last_resort.pool,
+                    last_resort.liquidity,
+                    None,
+                    prefer_metadata_creator_first,
+                )
+                .await?,
+            ));
+        }
+
+        if let Some(last_resort_low_lq) = best_last_resort_low_lq_candidate {
+            return Ok(Some(
+                self.build_creator_route_selection(
+                    &mint,
+                    last_resort_low_lq.market,
+                    last_resort_low_lq.pool,
+                    last_resort_low_lq.liquidity,
+                    None,
+                    prefer_metadata_creator_first,
+                )
+                .await?,
+            ));
+        }
+
+        if let Some(last_resort_relaxed) = best_last_resort_relaxed_candidate {
+            return Ok(Some(
+                self.build_creator_route_selection(
+                    &mint,
+                    last_resort_relaxed.market,
+                    last_resort_relaxed.pool,
+                    last_resort_relaxed.liquidity,
+                    Some(Self::relaxed_liquidity_warning(
+                        &mint,
+                        &last_resort_relaxed,
                         min_liquidity_raw,
                     )),
                     prefer_metadata_creator_first,
@@ -2575,29 +2744,31 @@ impl Swaps {
             }
         };
 
-        let buyer = self.pump_fun.keypair.pubkey();
-        let wsol_program = self
-            .sol_hook
-            .get_token_program_id(&crate::core::sol::WSOL_MINT)
-            .await
-            .context("failed to resolve WSOL token program for buy cleanup")?;
-        let wsol_ata = if wsol_program == crate::core::sol::TOKEN_PROGRAM_ID {
-            self.sol_hook
-                .get_ata_for_token(&buyer, &crate::core::sol::WSOL_MINT)
-        } else if wsol_program == crate::core::sol::TOKEN_2022_PROGRAM_ID {
-            self.sol_hook
-                .get_ata_for_token2022(&buyer, &crate::core::sol::WSOL_MINT)
-        } else {
-            anyhow::bail!(
-                "unsupported token program for WSOL buy cleanup: {}",
-                wsol_program
-            );
-        };
-        let close_wsol_ix = self
-            .sol_hook
-            .close_token_account_ix(&wsol_program, &wsol_ata, &buyer, &buyer)
-            .context("failed to build WSOL close instruction for buy cleanup")?;
-        ixs.push(close_wsol_ix);
+        if Self::buy_needs_shared_wsol_cleanup(market) {
+            let buyer = self.pump_fun.keypair.pubkey();
+            let wsol_program = self
+                .sol_hook
+                .get_token_program_id(&crate::core::sol::WSOL_MINT)
+                .await
+                .context("failed to resolve WSOL token program for buy cleanup")?;
+            let wsol_ata = if wsol_program == crate::core::sol::TOKEN_PROGRAM_ID {
+                self.sol_hook
+                    .get_ata_for_token(&buyer, &crate::core::sol::WSOL_MINT)
+            } else if wsol_program == crate::core::sol::TOKEN_2022_PROGRAM_ID {
+                self.sol_hook
+                    .get_ata_for_token2022(&buyer, &crate::core::sol::WSOL_MINT)
+            } else {
+                anyhow::bail!(
+                    "unsupported token program for WSOL buy cleanup: {}",
+                    wsol_program
+                );
+            };
+            let close_wsol_ix = self
+                .sol_hook
+                .close_token_account_ix(&wsol_program, &wsol_ata, &buyer, &buyer)
+                .context("failed to build WSOL close instruction for buy cleanup")?;
+            ixs.push(close_wsol_ix);
+        }
 
         let tx = if use_swqos {
             let settings = swqos_settings
@@ -2983,17 +3154,18 @@ mod tests {
     }
 
     #[test]
-    fn test_default_market_lookup_groups_defer_clmm_and_dlmm() {
+    fn test_default_market_lookup_groups_search_dlmm_primary_and_defer_clmm() {
         let groups = Swaps::default_market_lookup_groups();
         assert_eq!(groups[0], &DEFAULT_MARKET_PRIMARY_LOOKUP);
         assert_eq!(groups[1], &DEFAULT_MARKET_DEFERRED_LOOKUP);
         assert!(!groups[0].contains(&Market::RaydiumClmm));
-        assert!(!groups[0].contains(&Market::MeteoraDlmm));
-        assert_eq!(groups[1], &[Market::RaydiumClmm, Market::MeteoraDlmm]);
+        assert!(groups[0].contains(&Market::MeteoraDlmm));
+        assert_eq!(groups[1], &[Market::RaydiumClmm]);
+        assert!(Swaps::is_last_resort_lookup_market(Market::MeteoraDlmm));
     }
 
     #[test]
-    fn test_explicit_market_priority_still_defers_clmm_and_dlmm() {
+    fn test_explicit_market_priority_searches_dlmm_with_primary_and_defers_clmm() {
         let groups = Swaps::market_lookup_groups_for_priority(&[
             Market::RaydiumClmm,
             Market::PumpSwap,
@@ -3003,8 +3175,8 @@ mod tests {
         assert_eq!(
             groups,
             vec![
-                vec![Market::PumpSwap, Market::PumpFun],
-                vec![Market::RaydiumClmm, Market::MeteoraDlmm],
+                vec![Market::PumpSwap, Market::MeteoraDlmm, Market::PumpFun],
+                vec![Market::RaydiumClmm],
             ]
         );
     }
@@ -3013,6 +3185,13 @@ mod tests {
     fn test_single_deferred_market_priority_remains_eligible() {
         let groups = Swaps::market_lookup_groups_for_priority(&[Market::RaydiumClmm]);
         assert_eq!(groups, vec![vec![Market::RaydiumClmm]]);
+    }
+
+    #[test]
+    fn test_buy_shared_wsol_cleanup_skips_native_sol_pump_fun() {
+        assert!(!Swaps::buy_needs_shared_wsol_cleanup(Market::PumpFun));
+        assert!(Swaps::buy_needs_shared_wsol_cleanup(Market::PumpSwap));
+        assert!(Swaps::buy_needs_shared_wsol_cleanup(Market::MeteoraDammV2));
     }
 
     #[test]
@@ -3036,13 +3215,18 @@ mod tests {
     }
 
     #[test]
-    fn test_preferred_route_markets_from_mint_family_prefers_pump_swap_family() {
+    fn test_preferred_route_markets_from_mint_family_prefers_raydium_migration_family() {
         assert_eq!(
             Swaps::preferred_route_markets_from_mint_family(
                 "21EZ83KVV3YqhXiAuEwsWsUF8C2EkNVZC3ejV29Hpump",
                 Swaps::default_market_priority(),
             ),
-            vec![Market::PumpSwap, Market::PumpFun]
+            vec![
+                Market::RaydiumAmmV4,
+                Market::RaydiumCpmm,
+                Market::PumpSwap,
+                Market::PumpFun,
+            ]
         );
     }
 
