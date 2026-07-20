@@ -1,8 +1,8 @@
 use {
     super::{
         ApiError, ApiState, decode_versioned_transaction_base64, enforce_live_send_cluster_match,
-        resolve_request_rpc, resolve_required_signers, rpc_client_for_attempt,
-        sign_versioned_transaction, submit_signed_transaction,
+        redact_rpc_log_text, redact_rpc_url_for_log, resolve_request_rpc, resolve_required_signers,
+        rpc_client_for_attempt, sign_versioned_transaction, submit_signed_transaction,
     },
     crate::{
         core::{
@@ -274,7 +274,8 @@ async fn discover_program_accounts_resilient(
             helius_get_program_account_pubkeys_v2(rpc_url, program_id, filters).await
         }
         Err(error) => Err(ApiError::internal(format!(
-            "{market_label} pool discovery failed: {error}"
+            "{market_label} pool discovery failed: {}",
+            redact_rpc_log_text(&error.to_string())
         ))),
     }
 }
@@ -703,14 +704,15 @@ pub(super) async fn get_positions(
         {
             Ok(rows) => return Ok(Json(rows)),
             Err(error) => {
-                let message = error.message.clone();
+                let message = redact_rpc_log_text(&error.message);
                 let retryable = is_retryable_pool_positions_error(&message);
-                last_error = Some(error);
+                last_error = Some(ApiError::new(error.status, message.clone()));
                 if !retryable || attempt + 1 >= attempt_count {
                     break;
                 }
                 warn!(
-                    "pool positions lookup retrying after transient rpc error on {selected_rpc_url} (attempt {}/{}): {}",
+                    "pool positions lookup retrying after transient rpc error on {} (attempt {}/{}): {}",
+                    redact_rpc_url_for_log(&selected_rpc_url),
                     attempt + 1,
                     attempt_count,
                     message

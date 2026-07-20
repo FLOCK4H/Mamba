@@ -2814,7 +2814,7 @@ impl Default for TradeConfig {
             sell_pct: 100,
             slippage_pct: 15.0,
             retries: 3,
-            priority_fee_level: TradePriorityFeeLevel::Env,
+            priority_fee_level: TradePriorityFeeLevel::Medium,
             priority_fee_custom_sol: 0.00003,
             live_enabled: false,
         }
@@ -2824,9 +2824,9 @@ impl Default for TradeConfig {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 enum TradePriorityFeeLevel {
-    #[default]
-    Env,
     Low,
+    #[default]
+    #[serde(alias = "env")]
     Medium,
     High,
     Turbo,
@@ -2835,8 +2835,7 @@ enum TradePriorityFeeLevel {
 }
 
 impl TradePriorityFeeLevel {
-    const ALL: [Self; 7] = [
-        Self::Env,
+    const ALL: [Self; 6] = [
         Self::Low,
         Self::Medium,
         Self::High,
@@ -2857,7 +2856,6 @@ impl TradePriorityFeeLevel {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Env => "env",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
@@ -2873,7 +2871,6 @@ impl TradePriorityFeeLevel {
 
     fn request_level(self) -> Option<&'static str> {
         match self {
-            Self::Env => None,
             Self::Low => Some("low"),
             Self::Medium => Some("medium"),
             Self::High => Some("high"),
@@ -2885,7 +2882,6 @@ impl TradePriorityFeeLevel {
 
     fn priority_fee_override(self, custom_sol: f64) -> anyhow::Result<Option<PriorityFeeOverride>> {
         let override_fee = match self {
-            Self::Env => None,
             Self::Low => Some(PriorityFeeOverride::Level(PriorityFeeLevel::Low)),
             Self::Medium => Some(PriorityFeeOverride::Level(PriorityFeeLevel::Medium)),
             Self::High => Some(PriorityFeeOverride::Level(PriorityFeeLevel::High)),
@@ -16675,7 +16671,7 @@ impl AppState {
             trade_sell_pct: 100,
             trade_slippage_pct: 15.0,
             trade_retries: 3,
-            trade_priority_fee_level: TradePriorityFeeLevel::Env,
+            trade_priority_fee_level: TradePriorityFeeLevel::Medium,
             trade_priority_fee_custom_sol: 0.00003,
             mev_enabled: false,
             mev_tip_sol: 0.00001,

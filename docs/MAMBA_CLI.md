@@ -36,7 +36,6 @@ Both Swap and Dash expose a `priority_fee_level` selector in their trade control
 
 | Level | Behavior |
 |-------|----------|
-| `env` | Uses the default from `.env` (`FEE_LEVEL`) |
 | `low` | Low priority fee |
 | `medium` | Medium priority fee |
 | `high` | High priority fee |

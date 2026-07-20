@@ -2,12 +2,16 @@ use {
     crate::core::{
         sol::{
             DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS, METADATA_PROGRAM_ID, PriorityFeeLevel,
-            PriorityFeeOverride, SolHook, WSOL_MINT,
+            PriorityFeeOverride, SYSTEM_PROGRAM, SolHook, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+            WSOL_MINT,
         },
         wallet::{ManagedWalletRuntime, wallet_store_path},
     },
     crate::dex::{
-        pump_fun::PumpFun,
+        pump_fun::{
+            EVENT_AUTHORITY, FEE_CONFIG, FEE_PROGRAM, GLOBAL, GLOBAL_VOLUME_ACCUMULATOR,
+            PUMP_FUN_ID, PumpFun,
+        },
         pump_swap::PumpSwap,
         swaps::{
             CreatorResolutionSource, DEFAULT_MARKET_PRIORITY, Market, MintCreatorRoute,
@@ -53,11 +57,12 @@ use {
         },
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
-    tokio::sync::Mutex,
+    tokio::{runtime::Handle, sync::Mutex},
 };
 
 use chrono::{DateTime, Utc};
 
+mod activity;
 mod create;
 mod pool;
 mod wallet;
@@ -91,6 +96,7 @@ pub struct ApiState {
     cluster: crate::core::cluster::SolanaCluster,
     store: Option<Arc<ApiStore>>,
     subscriptions: Arc<Mutex<HashMap<Market, MarketSubscription>>>,
+    market_runtime: Option<Handle>,
     api_key: String,
     allow_live_sends: bool,
     allow_private_network_clients: bool,
@@ -188,15 +194,25 @@ impl ApiConfig {
 }
 
 pub async fn run_from_env() -> anyhow::Result<()> {
+    run_from_env_inner(None).await
+}
+
+pub async fn run_from_env_with_market_runtime(market_runtime: Handle) -> anyhow::Result<()> {
+    run_from_env_inner(Some(market_runtime)).await
+}
+
+async fn run_from_env_inner(market_runtime: Option<Handle>) -> anyhow::Result<()> {
     let config = ApiConfig::from_env()?;
-    let state = Arc::new(build_state(&config).await?);
+    let state = Arc::new(build_state(&config, market_runtime).await?);
 
     let api_routes = Router::new()
         .route("/health", get(get_health))
         .route("/docs", get(get_docs))
         .route("/markets", get(get_markets))
+        .route("/fees/priority", get(get_priority_fee_estimate))
         .route("/swap", post(post_swap))
         .route("/create/methods", get(create::get_methods))
+        .route("/create/ipfs-upload", post(create::post_ipfs_upload))
         .route("/create/build", post(create::post_build))
         .route("/create/execute", post(create::post_execute))
         .route(
@@ -237,6 +253,7 @@ pub async fn run_from_env() -> anyhow::Result<()> {
         .route("/mints/{mint}/metadata", get(get_mint_metadata))
         .route("/mints/metadata-batch", post(post_mint_metadata_batch))
         .route("/mints/{mint}/route", get(get_mint_route))
+        .route("/mints/{mint}/activity", get(activity::get_mint_activity))
         .route("/ws/subscribe", post(post_ws_subscribe))
         .route("/ws/unsubscribe", post(post_ws_unsubscribe))
         .route("/ws/subscriptions", get(get_ws_subscriptions))
@@ -269,7 +286,10 @@ pub async fn run_from_env() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn build_state(config: &ApiConfig) -> anyhow::Result<ApiState> {
+async fn build_state(
+    config: &ApiConfig,
+    market_runtime: Option<Handle>,
+) -> anyhow::Result<ApiState> {
     let (signer, signer_configured) = load_keypair(config.signer_raw.as_deref())?;
     let rpc_clients = Arc::new(
         config
@@ -304,7 +324,11 @@ async fn build_state(config: &ApiConfig) -> anyhow::Result<ApiState> {
                     .as_deref()
                     .map(|value| format!(" ({value})"))
                     .unwrap_or_default();
-                last_error = Some(anyhow::anyhow!("getGenesisHash {url}: {error}{detail}"));
+                let error = redact_rpc_log_text(&error.to_string());
+                last_error = Some(anyhow::anyhow!(
+                    "getGenesisHash {}: {error}{detail}",
+                    redact_rpc_url_for_log(url)
+                ));
             }
             Err(_) => {
                 let detail = describe_genesis_hash_rpc_failure(url).await;
@@ -313,23 +337,32 @@ async fn build_state(config: &ApiConfig) -> anyhow::Result<ApiState> {
                     .map(|value| format!(" ({value})"))
                     .unwrap_or_default();
                 last_error = Some(anyhow::anyhow!(
-                    "rpc getGenesisHash timed out for {url}{detail}"
+                    "rpc getGenesisHash timed out for {}{detail}",
+                    redact_rpc_url_for_log(url)
                 ));
             }
         }
     }
 
-    let genesis_hash = genesis_hash.ok_or_else(|| {
-        anyhow::anyhow!(
-            "rpc getGenesisHash failed: {}",
-            last_error
-                .map(|error| error.to_string())
-                .unwrap_or_else(|| "unknown error".to_string())
-        )
-    })?;
-    let cluster = crate::core::cluster::SolanaCluster::from_genesis_hash(&genesis_hash.to_string());
+    let cluster = if let Some(genesis_hash) = genesis_hash {
+        crate::core::cluster::SolanaCluster::from_genesis_hash(&genesis_hash.to_string())
+    } else {
+        let last_error = last_error
+            .map(|error| redact_rpc_log_text(&error.to_string()))
+            .unwrap_or_else(|| "unknown error".to_string());
+        let inferred = infer_cluster_from_rpc_urls(&config.rpc_urls);
+        warn!(
+            "rpc getGenesisHash failed across configured endpoints; using inferred cluster {inferred:?}: {last_error}"
+        );
+        inferred
+    };
     if let Some(source) = genesis_source {
-        println!("rpc cluster detected via getGenesisHash: {cluster:?} ({source})");
+        println!(
+            "rpc cluster detected via getGenesisHash: {cluster:?} ({})",
+            redact_rpc_url_for_log(&source)
+        );
+    } else {
+        println!("rpc cluster inferred without getGenesisHash: {cluster:?}");
     }
     let mut rpc_cluster_cache = HashMap::new();
     for url in &config.rpc_urls {
@@ -369,6 +402,7 @@ async fn build_state(config: &ApiConfig) -> anyhow::Result<ApiState> {
         cluster,
         store,
         subscriptions: Arc::new(Mutex::new(HashMap::new())),
+        market_runtime,
         api_key: config.api_key.clone(),
         allow_live_sends: config.allow_live_sends,
         allow_private_network_clients: config.allow_private_network_clients,
@@ -387,6 +421,22 @@ struct GenesisHashRpcErrorBody {
 struct GenesisHashRpcResponseBody {
     error: Option<GenesisHashRpcErrorBody>,
     result: Option<String>,
+}
+
+fn infer_cluster_from_rpc_urls(urls: &[String]) -> crate::core::cluster::SolanaCluster {
+    if urls
+        .iter()
+        .any(|url| url.to_ascii_lowercase().contains("devnet"))
+    {
+        return crate::core::cluster::SolanaCluster::Devnet;
+    }
+    if urls
+        .iter()
+        .any(|url| url.to_ascii_lowercase().contains("testnet"))
+    {
+        return crate::core::cluster::SolanaCluster::Testnet;
+    }
+    crate::core::cluster::SolanaCluster::MainnetBeta
 }
 
 async fn describe_genesis_hash_rpc_failure(url: &str) -> Option<String> {
@@ -418,20 +468,37 @@ async fn describe_genesis_hash_rpc_failure(url: &str) -> Option<String> {
 
     if let Ok(parsed) = serde_json::from_str::<GenesisHashRpcResponseBody>(body_trimmed) {
         if let Some(error) = parsed.error {
-            return Some(format!("rpc error {}: {}", error.code, error.message));
+            return Some(format!(
+                "rpc error {}: {}",
+                error.code,
+                redact_rpc_log_text(&error.message)
+            ));
         }
         if parsed.result.is_some() {
             return Some("raw JSON-RPC probe succeeded unexpectedly".to_string());
         }
     }
 
+    let body_trimmed = redact_rpc_log_text(body_trimmed);
     let truncated = if body_trimmed.chars().count() > 240 {
         format!("{}...", body_trimmed.chars().take(240).collect::<String>())
     } else {
-        body_trimmed.to_string()
+        body_trimmed
     };
 
     Some(format!("http {status}: {truncated}"))
+}
+
+fn redact_rpc_log_text(value: &str) -> String {
+    SolHook::redact_url_queries_in_text(value)
+}
+
+fn redact_rpc_url_for_log(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    SolHook::rpc_url_log_label(trimmed)
 }
 
 fn normalize_rpc_url_key(url: &str) -> Option<String> {
@@ -536,6 +603,26 @@ fn market_endpoint_slot(market: Market, endpoint_count: usize) -> usize {
     market_slot % endpoint_count
 }
 
+fn endpoint_attempt_order(endpoints: &[String], start_slot: usize) -> Vec<String> {
+    if endpoints.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ordered = Vec::<String>::with_capacity(endpoints.len());
+    let mut seen = HashSet::<String>::new();
+    for offset in 0..endpoints.len() {
+        let endpoint = endpoints[(start_slot + offset) % endpoints.len()].trim();
+        if endpoint.is_empty() {
+            continue;
+        }
+        let label = SolHook::rpc_url_label(endpoint).to_string();
+        if seen.insert(label) {
+            ordered.push(endpoint.to_string());
+        }
+    }
+    ordered
+}
+
 async fn rpc_client_for_attempt(
     state: &ApiState,
     base_offset: usize,
@@ -588,7 +675,8 @@ async fn resolve_request_rpc(
                     {
                         warn!(
                             "reusing cached rpc cluster for override {} after getGenesisHash error: {}",
-                            url, error
+                            redact_rpc_url_for_log(url),
+                            SolHook::redact_url_queries_in_text(&error.to_string())
                         );
                         return Ok((rpc, cluster));
                     }
@@ -602,7 +690,7 @@ async fn resolve_request_rpc(
                     {
                         warn!(
                             "reusing cached rpc cluster for override {} after getGenesisHash timeout",
-                            url
+                            redact_rpc_url_for_log(url)
                         );
                         return Ok((rpc, cluster));
                     }
@@ -874,6 +962,7 @@ struct HealthResponse {
     selected_wallet_count: usize,
     active_wallet_pubkey: Option<String>,
     active_ws_subscriptions: Vec<String>,
+    dropped_ws_observations: u64,
     timestamp_unix_ms: u128,
 }
 
@@ -884,6 +973,10 @@ async fn get_health(State(state): State<Arc<ApiState>>) -> Result<Json<HealthRes
         .filter(|(_, subscription)| !subscription.task.is_finished())
         .map(|(market, _)| market.as_str().to_string())
         .collect::<Vec<_>>();
+    let dropped_ws_observations = subscriptions
+        .values()
+        .map(|subscription| subscription.handler.dropped_observation_count())
+        .sum();
 
     let timestamp_unix_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -910,6 +1003,7 @@ async fn get_health(State(state): State<Arc<ApiState>>) -> Result<Json<HealthRes
             .and_then(ManagedWalletRuntime::active_pubkey)
             .map(|value| value.to_string()),
         active_ws_subscriptions,
+        dropped_ws_observations,
         timestamp_unix_ms,
     }))
 }
@@ -942,8 +1036,18 @@ async fn get_docs() -> Json<DocsResponse> {
             },
             DocsEndpoint {
                 method: "GET",
+                path: "/fees/priority",
+                description: "Estimate priority fee for a market-specific example transaction",
+            },
+            DocsEndpoint {
+                method: "GET",
                 path: "/create/methods",
                 description: "List token creation builder methods (build-only, no send)",
+            },
+            DocsEndpoint {
+                method: "POST",
+                path: "/create/ipfs-upload",
+                description: "Upload token image and metadata through Mamba's pump.fun IPFS path and return the metadata URI",
             },
             DocsEndpoint {
                 method: "POST",
@@ -1067,6 +1171,11 @@ async fn get_docs() -> Json<DocsResponse> {
             },
             DocsEndpoint {
                 method: "GET",
+                path: "/mints/{mint}/activity",
+                description: "Index recent decoded trades and current token holders for a mint",
+            },
+            DocsEndpoint {
+                method: "GET",
                 path: "/mints/{mint}/creator",
                 description: "Resolve true first creator (metadata-first)",
             },
@@ -1131,6 +1240,151 @@ async fn get_markets() -> Json<MarketsResponse> {
             .map(Market::as_str)
             .collect(),
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct PriorityFeeEstimateQuery {
+    level: Option<String>,
+    market: Option<String>,
+    compute_units: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct PriorityFeeEstimateResponse {
+    level: String,
+    market: String,
+    sample_kind: String,
+    sample_mint: Option<String>,
+    compute_units: u32,
+    priority_fee_micro_lamports: u64,
+    priority_fee_lamports: u64,
+    priority_fee_sol: f64,
+    base_fee_lamports: u64,
+    total_fee_lamports: u64,
+    total_fee_sol: f64,
+    source_addresses: Vec<String>,
+    source: &'static str,
+    timestamp_unix_ms: u128,
+}
+
+fn priority_fee_lamports(micro_lamports_per_cu: u64, compute_units: u32) -> u64 {
+    let numerator = u128::from(micro_lamports_per_cu).saturating_mul(u128::from(compute_units));
+    numerator
+        .saturating_add(999_999)
+        .checked_div(1_000_000)
+        .unwrap_or(0)
+        .min(u128::from(u64::MAX)) as u64
+}
+
+async fn pump_fun_fee_sample_addresses(state: &ApiState) -> (Vec<Pubkey>, Option<String>) {
+    let handlers = collect_active_market_handlers(state, Some(&[Market::PumpFun])).await;
+    let sample = collect_cached_mints_from_handlers(&handlers)
+        .into_iter()
+        .max_by(|(_, left), (_, right)| {
+            left.last_activity_time
+                .partial_cmp(&right.last_activity_time)
+                .unwrap_or(Ordering::Equal)
+        })
+        .map(|(_, mint)| mint);
+
+    let mut addresses = vec![
+        PUMP_FUN_ID,
+        GLOBAL,
+        GLOBAL_VOLUME_ACCUMULATOR,
+        FEE_CONFIG,
+        FEE_PROGRAM,
+        EVENT_AUTHORITY,
+        SYSTEM_PROGRAM,
+        TOKEN_PROGRAM_ID,
+        TOKEN_2022_PROGRAM_ID,
+    ];
+    let sample_mint = sample.as_ref().map(|mint| mint.mint.to_string());
+
+    if let Some(mint) = sample {
+        addresses.push(Pubkey::new_from_array(mint.mint.to_bytes()));
+        addresses.push(mint.bonding_curve);
+        addresses.push(mint.creator);
+    }
+
+    addresses.sort_by_key(|address| address.to_string());
+    addresses.dedup();
+    (addresses, sample_mint)
+}
+
+async fn priority_fee_sample_addresses(
+    state: &ApiState,
+    market: Market,
+) -> (Vec<Pubkey>, Option<String>, String) {
+    match market {
+        Market::PumpFun => {
+            let (addresses, sample_mint) = pump_fun_fee_sample_addresses(state).await;
+            (addresses, sample_mint, "pump_fun_buy".to_string())
+        }
+        _ => (
+            vec![SYSTEM_PROGRAM, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID],
+            None,
+            format!("{}_generic", market.as_str()),
+        ),
+    }
+}
+
+async fn get_priority_fee_estimate(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<PriorityFeeEstimateQuery>,
+) -> Result<Json<PriorityFeeEstimateResponse>, ApiError> {
+    let level_raw = query.level.as_deref().unwrap_or("medium");
+    let level = PriorityFeeLevel::parse(level_raw).ok_or_else(|| {
+        ApiError::bad_request("level must be one of low, medium, high, turbo, max")
+    })?;
+    let market = query
+        .market
+        .as_deref()
+        .map(parse_market_or_bad_request)
+        .transpose()?
+        .unwrap_or(Market::PumpFun);
+    let compute_units = query
+        .compute_units
+        .unwrap_or(DEFAULT_PRIORITY_FEE_CLAMP_COMPUTE_UNITS)
+        .clamp(1, 1_400_000);
+    let (addresses, sample_mint, sample_kind) =
+        priority_fee_sample_addresses(state.as_ref(), market).await;
+    let micro_lamports = state
+        .swaps
+        .sol_hook
+        .fetch_priority_fee(&level, &addresses)
+        .await
+        .map_err(ApiError::from)?;
+    let priority_fee_lamports = priority_fee_lamports(micro_lamports, compute_units);
+    let base_fee_lamports: u64 = 5_000;
+    let total_fee_lamports = base_fee_lamports.saturating_add(priority_fee_lamports);
+    let timestamp_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_millis();
+
+    Ok(Json(PriorityFeeEstimateResponse {
+        level: match level {
+            PriorityFeeLevel::Low => "low",
+            PriorityFeeLevel::Medium => "medium",
+            PriorityFeeLevel::High => "high",
+            PriorityFeeLevel::Turbo => "turbo",
+            PriorityFeeLevel::Max => "max",
+        }
+        .to_string(),
+        market: market.as_str().to_string(),
+        sample_kind,
+        sample_mint,
+        compute_units,
+        priority_fee_micro_lamports: micro_lamports,
+        priority_fee_lamports,
+        priority_fee_sol: priority_fee_lamports as f64 / 1_000_000_000.0,
+        base_fee_lamports,
+        total_fee_lamports,
+        total_fee_sol: total_fee_lamports as f64 / 1_000_000_000.0,
+        source_addresses: addresses.iter().map(ToString::to_string).collect(),
+        source: "mamba:priority-fee",
+        timestamp_unix_ms,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2011,10 +2265,11 @@ fn parse_market_or_bad_request(raw: &str) -> Result<Market, ApiError> {
 }
 
 fn spawn_ws_market_subscription(
+    market_runtime: Option<&Handle>,
     ws_handler: Arc<WsHandler>,
     market: Market,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+    let future = async move {
         let result = match market {
             Market::PumpSwap => ws_handler.subscribe_ws_pump_swap().await,
             Market::PumpFun => ws_handler.subscribe_ws_pump_fun().await,
@@ -2035,7 +2290,12 @@ fn spawn_ws_market_subscription(
                 error
             );
         }
-    })
+    };
+
+    match market_runtime {
+        Some(runtime) => runtime.spawn(future),
+        None => tokio::spawn(future),
+    }
 }
 
 async fn post_ws_subscribe(
@@ -2055,11 +2315,10 @@ async fn post_ws_subscribe(
     }
 
     let ws_slot = market_endpoint_slot(market, state.ws_urls.len());
-    let ws_url = state
-        .ws_urls
-        .get(ws_slot)
-        .cloned()
-        .ok_or_else(|| ApiError::internal("missing configured websocket endpoint"))?;
+    let ws_urls = endpoint_attempt_order(&state.ws_urls, ws_slot);
+    if ws_urls.is_empty() {
+        return Err(ApiError::internal("missing configured websocket endpoint"));
+    }
     let rpc_slot = market_endpoint_slot(market, state.rpc_clients.len());
     let rpc_client = state
         .rpc_clients
@@ -2068,8 +2327,8 @@ async fn post_ws_subscribe(
         .ok_or_else(|| ApiError::internal("missing configured RPC endpoint"))?;
     let sol_hook = SolHook::from_rpc_client_with_cluster(rpc_client, state.cluster);
 
-    let handler = Arc::new(WsHandler::new(sol_hook, ws_url.clone()));
-    let task = spawn_ws_market_subscription(handler.clone(), market);
+    let handler = Arc::new(WsHandler::with_ws_urls(sol_hook, ws_urls));
+    let task = spawn_ws_market_subscription(state.market_runtime.as_ref(), handler.clone(), market);
     subscriptions.insert(market, MarketSubscription { handler, task });
 
     Ok(Json(WsSubscriptionResponse {
@@ -2395,10 +2654,6 @@ fn parse_swap_priority_fee_override(
         return Ok(None);
     };
 
-    if level == "env" {
-        return Ok(None);
-    }
-
     if level == "custom" {
         return Err(ApiError::bad_request(
             "priority_fee_level=custom requires priority_fee_sol",
@@ -2407,7 +2662,7 @@ fn parse_swap_priority_fee_override(
 
     let parsed = PriorityFeeLevel::parse(level).ok_or_else(|| {
         ApiError::bad_request(
-            "priority_fee_level must be one of env, low, medium, high, turbo, max, custom",
+            "priority_fee_level must be one of low, medium, high, turbo, max, custom",
         )
     })?;
     Ok(Some(PriorityFeeOverride::Level(parsed)))
@@ -2765,8 +3020,8 @@ async fn resolve_mint_route_selection_with_rpc_fallback(
                     state
                         .rpc_urls
                         .get(idx)
-                        .map(|value| value.as_str())
-                        .unwrap_or("<unknown>")
+                        .map(|value| redact_rpc_url_for_log(value))
+                        .unwrap_or_else(|| "<unknown>".to_string())
                 );
                 return Ok(Some(route));
             }
@@ -2778,9 +3033,9 @@ async fn resolve_mint_route_selection_with_rpc_fallback(
                 state
                     .rpc_urls
                     .get(idx)
-                    .map(|value| value.as_str())
-                    .unwrap_or("<unknown>"),
-                error.message
+                    .map(|value| redact_rpc_url_for_log(value))
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                redact_rpc_log_text(&error.message)
             ),
         }
     }
@@ -2812,11 +3067,14 @@ async fn fetch_price_for_route_with_fallback(
                     route.market.as_str(),
                     route.pool,
                     cluster,
-                    error
+                    redact_rpc_log_text(&error.to_string())
                 );
             }
             Err(error) => {
-                return Err(ApiError::new(StatusCode::BAD_GATEWAY, error.to_string()));
+                return Err(ApiError::new(
+                    StatusCode::BAD_GATEWAY,
+                    redact_rpc_log_text(&error.to_string()),
+                ));
             }
         }
     }
@@ -2847,8 +3105,8 @@ async fn fetch_price_for_route_with_fallback(
                     state
                         .rpc_urls
                         .get(idx)
-                        .map(|value| value.as_str())
-                        .unwrap_or("<unknown>")
+                        .map(|value| redact_rpc_url_for_log(value))
+                        .unwrap_or_else(|| "<unknown>".to_string())
                 );
                 return Ok(price);
             }
@@ -2860,9 +3118,9 @@ async fn fetch_price_for_route_with_fallback(
                 state
                     .rpc_urls
                     .get(idx)
-                    .map(|value| value.as_str())
-                    .unwrap_or("<unknown>"),
-                error
+                    .map(|value| redact_rpc_url_for_log(value))
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                redact_rpc_log_text(&error.to_string())
             ),
         }
     }
@@ -2878,7 +3136,7 @@ async fn fetch_price_for_route_with_fallback(
                 route.market.as_str(),
                 route.pool,
                 mint,
-                error
+                redact_rpc_log_text(&error.to_string())
             )
         })
         .unwrap_or_else(|| {
@@ -4319,6 +4577,7 @@ mod tests {
             cluster: crate::core::cluster::SolanaCluster::Devnet,
             store: None,
             subscriptions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            market_runtime: None,
             api_key: "test-api-key".to_string(),
             allow_live_sends: false,
             allow_private_network_clients: false,
@@ -4368,6 +4627,7 @@ mod tests {
             cluster: crate::core::cluster::SolanaCluster::Devnet,
             store: None,
             subscriptions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            market_runtime: None,
             api_key: "test-api-key".to_string(),
             allow_live_sends: true,
             allow_private_network_clients: false,

@@ -4,9 +4,15 @@
 /target_*
 /target-*
 /external/upstreams/
-/.env
-/.env.local
-/.env.*.local
+/.env*
+!/.env.example
+/.local-state/
+
+# Local agent context. Keep these on the host, never in the public repository.
+/AGENTS.md
+/FINDINGS.md
+/PRD.md
+/STATUS.md
 /.venv-ws
 /.venv-docs
 /docs-site

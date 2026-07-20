@@ -5,6 +5,10 @@ use {
         sign_versioned_transaction, submit_signed_transaction,
     },
     crate::compute_budget::compute_budget::ix_set_compute_unit_price,
+    crate::core::ipfs::{
+        DEFAULT_PUMP_FUN_IPFS_UPLOAD_URL, PumpFunIpfsUploadRequest, PumpFunIpfsUploadResponse,
+        upload_token_metadata_to_ipfs_via_pump_fun,
+    },
     crate::core::{
         cluster::SolanaCluster,
         create::{
@@ -20,6 +24,7 @@ use {
             spl_token_2022_inline_metadata_required_space,
         },
         sol::{PriorityFeeLevel, SolHook, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, WSOL_MINT},
+        wallet::ensure_wallet_store_has_signer,
     },
     crate::dex::pump_fun::{MAYHEM_FEE_RECIPIENT, PUMP_FUN_ID},
     crate::dex::raydium_launchpad::{
@@ -29,7 +34,7 @@ use {
     crate::swqos::{SWQoSettings, SwqosProvider, tip_account_for_provider},
     axum::{
         Json,
-        extract::{Path, Query, State},
+        extract::{Multipart, Path, Query, State},
     },
     borsh::BorshDeserialize,
     serde::{Deserialize, Serialize},
@@ -46,6 +51,7 @@ use {
     solana_system_interface::instruction as system_instruction_if,
     std::{
         collections::{BTreeMap, BTreeSet, HashMap},
+        env,
         io::Cursor,
         str::FromStr,
         sync::Arc,
@@ -55,6 +61,7 @@ use {
 const MAX_NAME_LEN: usize = 32;
 const MAX_SYMBOL_LEN: usize = 10;
 const MAX_URI_LEN: usize = 200;
+const MAX_IPFS_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const SWQOS_MAINNET_ONLY_ERROR: &str =
     "use_swqos is only supported on mainnet-beta sender infrastructure";
 
@@ -236,6 +243,7 @@ pub(super) struct CreateBuildResponse {
     required_signers: Vec<String>,
     derived_addresses: BTreeMap<String, String>,
     mint_token_program: String,
+    generated_signers: BTreeMap<String, String>,
     simulation: Option<CreateSimulationResponse>,
 }
 
@@ -299,7 +307,7 @@ pub(super) async fn get_methods() -> Result<Json<Vec<CreateMethodSpec>>, ApiErro
     Ok(Json(vec![
         CreateMethodSpec {
             method: "pump_fun",
-            required_fields: vec!["method", "payer", "mint", "name", "symbol", "uri"],
+            required_fields: vec!["method", "payer", "name", "symbol", "uri"],
             optional_fields: vec![
                 "auto_buy.buy_sol",
                 "auto_buy.slippage_pct",
@@ -312,9 +320,7 @@ pub(super) async fn get_methods() -> Result<Json<Vec<CreateMethodSpec>>, ApiErro
         },
         CreateMethodSpec {
             method: "spl_token",
-            required_fields: vec![
-                "method", "payer", "mint", "name", "symbol", "uri", "decimals",
-            ],
+            required_fields: vec!["method", "payer", "name", "symbol", "uri", "decimals"],
             optional_fields: vec![
                 "initial_supply",
                 "freeze_authority",
@@ -330,9 +336,7 @@ pub(super) async fn get_methods() -> Result<Json<Vec<CreateMethodSpec>>, ApiErro
         },
         CreateMethodSpec {
             method: "spl_token_2022",
-            required_fields: vec![
-                "method", "payer", "mint", "name", "symbol", "uri", "decimals",
-            ],
+            required_fields: vec!["method", "payer", "name", "symbol", "uri", "decimals"],
             optional_fields: vec![
                 "initial_supply",
                 "freeze_authority",
@@ -350,7 +354,6 @@ pub(super) async fn get_methods() -> Result<Json<Vec<CreateMethodSpec>>, ApiErro
             required_fields: vec![
                 "method",
                 "payer",
-                "mint",
                 "name",
                 "symbol",
                 "uri",
@@ -374,6 +377,116 @@ pub(super) async fn get_methods() -> Result<Json<Vec<CreateMethodSpec>>, ApiErro
             execute_generated_fields: vec!["mint"],
         },
     ]))
+}
+
+pub(super) async fn post_ipfs_upload(
+    mut multipart: Multipart,
+) -> Result<Json<PumpFunIpfsUploadResponse>, ApiError> {
+    let mut name: Option<String> = None;
+    let mut symbol: Option<String> = None;
+    let mut description = String::new();
+    let mut twitter: Option<String> = None;
+    let mut telegram: Option<String> = None;
+    let mut website: Option<String> = None;
+    let mut show_name = true;
+    let mut file_name: Option<String> = None;
+    let mut file_content_type: Option<String> = None;
+    let mut file_bytes: Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| ApiError::bad_request(format!("invalid multipart upload: {error}")))?
+    {
+        let field_name = field.name().unwrap_or_default().to_string();
+
+        if field_name == "file" {
+            let content_type = field
+                .content_type()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            if !matches!(
+                content_type.as_str(),
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/svg+xml"
+            ) {
+                return Err(ApiError::bad_request(
+                    "unsupported token image content type",
+                ));
+            }
+
+            let upload_name = field.file_name().unwrap_or("token-image").to_string();
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|error| ApiError::bad_request(format!("read upload failed: {error}")))?;
+            if bytes.len() > MAX_IPFS_IMAGE_BYTES {
+                return Err(ApiError::bad_request("token image exceeds 10 MB"));
+            }
+
+            file_name = Some(upload_name);
+            file_content_type = Some(content_type);
+            file_bytes = Some(bytes.to_vec());
+            continue;
+        }
+
+        let value = field
+            .text()
+            .await
+            .map_err(|error| ApiError::bad_request(format!("read upload field failed: {error}")))?;
+        let value = value.trim().to_string();
+        match field_name.as_str() {
+            "name" => name = Some(value),
+            "symbol" => symbol = Some(value),
+            "description" => description = value,
+            "twitter" => twitter = (!value.is_empty()).then_some(value),
+            "telegram" => telegram = (!value.is_empty()).then_some(value),
+            "website" => website = (!value.is_empty()).then_some(value),
+            "show_name" | "showName" => {
+                show_name = !matches!(value.as_str(), "false" | "0" | "off" | "no")
+            }
+            _ => {}
+        }
+    }
+
+    let name = name
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_request("name is required"))?;
+    let symbol = symbol
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_request("symbol is required"))?;
+    let file_name = file_name.ok_or_else(|| ApiError::bad_request("file is required"))?;
+    let file_content_type =
+        file_content_type.ok_or_else(|| ApiError::bad_request("file content type is required"))?;
+    let file_bytes = file_bytes.ok_or_else(|| ApiError::bad_request("file is required"))?;
+
+    validate_token_fields(&name, &symbol, "https://example.invalid/placeholder")?;
+
+    let upload_url = env::var("MAMBA_IPFS_UPLOAD_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_PUMP_FUN_IPFS_UPLOAD_URL.to_string());
+    let client = reqwest::Client::new();
+    let upload = upload_token_metadata_to_ipfs_via_pump_fun(
+        &client,
+        &upload_url,
+        PumpFunIpfsUploadRequest {
+            name: &name,
+            symbol: &symbol,
+            description: &description,
+            twitter: twitter.as_deref(),
+            telegram: telegram.as_deref(),
+            website: website.as_deref(),
+            show_name,
+            file_name: &file_name,
+            file_bytes: &file_bytes,
+            file_content_type: &file_content_type,
+        },
+    )
+    .await
+    .map_err(|error| ApiError::internal(format!("ipfs upload failed: {error}")))?;
+
+    Ok(Json(upload))
 }
 
 pub(super) async fn get_raydium_launchpad_global_configs(
@@ -678,8 +791,23 @@ async fn build_create_response(
     ),
     ApiError,
 > {
+    let mut generated_signers = BTreeMap::new();
     let payer = Pubkey::from_str(request.payer.trim())
         .map_err(|_| ApiError::bad_request("invalid payer pubkey"))?;
+    if request
+        .mint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        let mint_signer = Keypair::new();
+        let mint_pubkey = mint_signer.pubkey().to_string();
+        ensure_wallet_store_has_signer(&mint_signer, "create-mint")?;
+        request.mint = Some(mint_pubkey.clone());
+        generated_signers.insert("mint".to_string(), mint_pubkey);
+    }
+
     let mint_raw = request
         .mint
         .as_deref()
@@ -1416,6 +1544,7 @@ async fn build_create_response(
                 .map(|(k, v)| (k.clone(), v.to_string()))
                 .collect(),
             mint_token_program: mint_token_program.to_string(),
+            generated_signers,
             simulation,
         },
         rpc,

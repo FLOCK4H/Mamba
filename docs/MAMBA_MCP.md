@@ -311,7 +311,7 @@ Both `buy_token` and `sell_token` accept fee override arguments.
 
 | Parameter | Values | Notes |
 |---|---|---|
-| `priority_fee_level` | `env`, `low`, `medium`, `high`, `turbo`, `max`, `custom` | Controls compute-unit price tier |
+| `priority_fee_level` | `low`, `medium`, `high`, `turbo`, `max`, `custom` | Controls compute-unit price tier |
 | `priority_fee_sol` | Decimal SOL amount | Used only when `priority_fee_level` is `custom` |
 
 ## Low-Liquidity Pool Handling

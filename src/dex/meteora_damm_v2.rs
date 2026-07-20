@@ -943,7 +943,9 @@ impl MeteoraDammV2 {
                 };
                 warn!(
                     "meteora damm v2 fetch_state primary rpc failed for pool {}: {}; retrying via {}",
-                    pool, primary_error, rpc_url
+                    pool,
+                    SolHook::redacted_error(&primary_error),
+                    SolHook::rpc_url_log_label(rpc_url)
                 );
                 let rpc_client = RpcClient::new_with_commitment(
                     rpc_url.to_string(),
@@ -954,7 +956,8 @@ impl MeteoraDammV2 {
                     .with_context(|| {
                         format!(
                             "readonly fallback fetch_state failed via {} after primary error: {}",
-                            rpc_url, primary_error
+                            SolHook::rpc_url_log_label(rpc_url),
+                            SolHook::redacted_error(&primary_error)
                         )
                     })
             }
@@ -983,8 +986,8 @@ impl MeteoraDammV2 {
                 warn!(
                     "meteora damm v2 bulk state fetch failed for {} pools: {}; retrying via {}",
                     pools.len(),
-                    primary_error,
-                    rpc_url
+                    SolHook::redacted_error(&primary_error),
+                    SolHook::rpc_url_log_label(rpc_url)
                 );
                 let rpc_client = RpcClient::new_with_commitment(
                     rpc_url.to_string(),
@@ -995,7 +998,8 @@ impl MeteoraDammV2 {
                         .with_context(|| {
                             format!(
                                 "readonly fallback bulk state fetch failed via {} after primary error: {}",
-                                rpc_url, primary_error
+                                SolHook::rpc_url_log_label(rpc_url),
+                                SolHook::redacted_error(&primary_error)
                             )
                         })?
             }

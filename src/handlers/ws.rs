@@ -43,10 +43,14 @@ use {
     },
     sqlx::types::Json,
     std::collections::{HashMap, HashSet},
+    std::future::Future,
     std::io::{self, Write},
     std::str::FromStr,
-    std::sync::Arc,
-    tokio::stream,
+    std::sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+    },
+    tokio::{stream, sync::Semaphore},
     tokio_stream::StreamExt,
     yellowstone_grpc_proto::prelude::subscribe_update::UpdateOneof,
     yellowstone_grpc_proto::prelude::{SubscribeUpdateTransactionInfo, TransactionStatusMeta},
@@ -61,6 +65,14 @@ pub fn timestamp_now() -> f64 {
         });
     let ts: f64 = time.as_secs() as f64 + f64::from(time.subsec_nanos()) * 1e-9;
     ts
+}
+
+fn event_timestamp_or_now(timestamp: i64) -> f64 {
+    if timestamp > 0 {
+        timestamp as f64
+    } else {
+        timestamp_now()
+    }
 }
 
 fn confirmed_transaction_logs(tx: &EncodedConfirmedTransactionWithStatusMeta) -> Vec<String> {
@@ -140,6 +152,11 @@ mod tests {
             Some(WsHandler::MARKET_METEORA_DAMM_V1)
         );
     }
+
+    #[test]
+    fn test_event_timestamp_uses_protocol_time_when_available() {
+        assert_eq!(event_timestamp_or_now(1_735_000_000), 1_735_000_000.0);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,6 +197,7 @@ pub struct Mint {
 pub struct WsHandler {
     pub sol_hook: SolHook,
     pub ws_url: String,
+    pub ws_urls: Vec<String>,
     pub mints: Cache<Pubkey, Mint>,
     pub holder_balances: DashMap<Pubkey, HashMap<Pubkey, f64>>,
     pub holder_delta_cache: Cache<String, Vec<(Pubkey, f64)>>,
@@ -187,6 +205,8 @@ pub struct WsHandler {
     pub migration_context_cache: Cache<String, (u64, f64)>,
     pub token_info_retries: DashMap<Pubkey, TokenInfoRetryState>,
     pub squeezer: Squeezer,
+    observation_permits: Arc<Semaphore>,
+    dropped_observations: Arc<AtomicU64>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -199,6 +219,9 @@ impl WsHandler {
     const LAUNCHPAD_BOOTSTRAP_SIGNATURE_LIMIT: usize = 50;
     const LAUNCHPAD_BOOTSTRAP_FETCH_LIMIT: usize = 12;
     const LAUNCHPAD_BOOTSTRAP_PROCESS_LIMIT: usize = 4;
+    const DEFAULT_WS_RPC_MAX_RPS: u64 = 8;
+    const DEFAULT_WS_RPC_MAX_IN_FLIGHT: usize = 4;
+    const DEFAULT_WS_OBSERVATION_MAX_IN_FLIGHT: usize = 2;
 
     const UNKNOWN_CREATED_TIME: f64 = 0.0;
     const HOLDER_BALANCE_EPSILON: f64 = 1e-9;
@@ -603,7 +626,9 @@ impl WsHandler {
                 Self::merge_mint_snapshot(&existing, &mut mint);
             }
         }
-        mint.last_activity_time = timestamp_now().max(mint.last_activity_time);
+        if mint.last_activity_time <= Self::UNKNOWN_CREATED_TIME {
+            mint.last_activity_time = timestamp_now();
+        }
         mints.insert(key_pubkey, mint);
     }
 
@@ -988,14 +1013,37 @@ impl WsHandler {
     }
 
     pub fn with_rps(sol_hook: SolHook, ws_url: String, max_rps: u64) -> Self {
+        Self::with_ws_urls_and_squeezer(sol_hook, vec![ws_url], Squeezer::new(max_rps))
+    }
+
+    pub fn with_ws_urls(sol_hook: SolHook, ws_urls: Vec<String>) -> Self {
+        Self::with_ws_urls_and_squeezer(sol_hook, ws_urls, Self::shared_ws_rpc_limiter())
+    }
+
+    fn with_ws_urls_and_squeezer(
+        sol_hook: SolHook,
+        ws_urls: Vec<String>,
+        squeezer: Squeezer,
+    ) -> Self {
         let mints = Cache::builder().max_capacity(4096).build();
         let holder_delta_cache = Cache::builder().max_capacity(16_384).build();
         let seen_mint_signatures = Cache::builder().max_capacity(131_072).build();
         let migration_context_cache = Cache::builder().max_capacity(8_192).build();
-        let squeezer = Squeezer::new(max_rps);
+        let observation_max_in_flight = Self::env_usize(
+            "MAMBA_WS_OBSERVATION_MAX_IN_FLIGHT",
+            Self::DEFAULT_WS_OBSERVATION_MAX_IN_FLIGHT,
+            1,
+            64,
+        );
+        let ws_urls = if ws_urls.is_empty() {
+            vec![String::new()]
+        } else {
+            ws_urls
+        };
         Self {
             sol_hook,
-            ws_url: ws_url.clone(),
+            ws_url: ws_urls[0].clone(),
+            ws_urls,
             mints,
             holder_balances: DashMap::new(),
             holder_delta_cache,
@@ -1003,7 +1051,88 @@ impl WsHandler {
             migration_context_cache,
             token_info_retries: DashMap::new(),
             squeezer,
+            observation_permits: Arc::new(Semaphore::new(observation_max_in_flight)),
+            dropped_observations: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    fn shared_ws_rpc_limiter() -> Squeezer {
+        static LIMITER: OnceLock<Squeezer> = OnceLock::new();
+
+        LIMITER
+            .get_or_init(|| {
+                let legacy_max_rps = std::env::var("SQUEEZE_MAX_RPS")
+                    .ok()
+                    .and_then(|raw| raw.trim().parse::<u64>().ok());
+                let max_rps = legacy_max_rps.unwrap_or_else(|| {
+                    Self::env_u64(
+                        "MAMBA_WS_RPC_MAX_RPS",
+                        Self::DEFAULT_WS_RPC_MAX_RPS,
+                        1,
+                        1_000,
+                    )
+                });
+                let max_in_flight = Self::env_usize(
+                    "MAMBA_WS_RPC_MAX_IN_FLIGHT",
+                    Self::DEFAULT_WS_RPC_MAX_IN_FLIGHT,
+                    1,
+                    256,
+                );
+                log!(
+                    cc::LIGHT_WHITE,
+                    "Websocket RPC enrichment limits: {} starts/sec, {} in flight",
+                    max_rps,
+                    max_in_flight
+                );
+                Squeezer::with_limits(max_rps, max_in_flight)
+            })
+            .clone()
+    }
+
+    fn env_u64(name: &str, default: u64, min: u64, max: u64) -> u64 {
+        let Ok(raw) = std::env::var(name) else {
+            return default;
+        };
+        match raw.trim().parse::<u64>() {
+            Ok(value) if (min..=max).contains(&value) => value,
+            _ => {
+                warn!("invalid {name}; using default {default}");
+                default
+            }
+        }
+    }
+
+    fn env_usize(name: &str, default: usize, min: usize, max: usize) -> usize {
+        let Ok(raw) = std::env::var(name) else {
+            return default;
+        };
+        match raw.trim().parse::<usize>() {
+            Ok(value) if (min..=max).contains(&value) => value,
+            _ => {
+                warn!("invalid {name}; using default {default}");
+                default
+            }
+        }
+    }
+
+    fn try_spawn_observation<F>(&self, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let Ok(permit) = self.observation_permits.clone().try_acquire_owned() else {
+            self.dropped_observations
+                .fetch_add(1, AtomicOrdering::Relaxed);
+            return;
+        };
+
+        tokio::spawn(async move {
+            let _permit = permit;
+            future.await;
+        });
+    }
+
+    pub fn dropped_observation_count(&self) -> u64 {
+        self.dropped_observations.load(AtomicOrdering::Relaxed)
     }
 
     async fn fetch_token_info_with_limit(
@@ -1045,12 +1174,12 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_pump_fun(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
 
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![PUMP_FUN_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -1073,7 +1202,7 @@ impl WsHandler {
                         let retries = self.token_info_retries.clone();
                         let signature_text = sig.clone();
 
-                        tokio::spawn(async move {
+                        self.try_spawn_observation(async move {
                             // wait 2ms so create arm can index the trade
                             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                             let signature = Signature::from_str(&signature_text).ok();
@@ -1245,56 +1374,56 @@ impl WsHandler {
                         let holder_balances = self.holder_balances.clone();
                         let seen_mint_signatures = self.seen_mint_signatures.clone();
                         let signature = Signature::from_str(&sig).ok();
+                        let name = create.name.clone();
+                        let symbol = create.symbol.clone();
+                        let uri = create.uri.clone();
+                        let creator = Address::from(create.creator.to_bytes());
+                        let ts = event_timestamp_or_now(create.timestamp);
 
-                        tokio::spawn(async move {
-                            let name = create.name.clone();
-                            let symbol = create.symbol.clone();
-                            let uri = create.uri.clone();
-                            let creator = Address::from(create.creator.to_bytes());
-                            let ts = timestamp_now();
+                        let price = PumpFun::get_open_price(&create);
+                        let mut new_mint = Mint {
+                            mint: Address::from(create.mint.to_bytes()),
+                            bonding_curve: Address::from(create.bonding_curve.to_bytes()),
+                            price,
+                            highest_price: price,
+                            name,
+                            symbol,
+                            uri,
+                            creator: Address::from(creator.to_bytes()),
+                            creator_sold: false,
+                            creator_token_amount: 0.0,
+                            buys: 0,
+                            sells: 0,
+                            tx_count: 0,
+                            volume: 0.0,
+                            // Create events don't carry real reserves; virtual SOL is a
+                            // better initial liquidity proxy than zero.
+                            liquidity: create.virtual_sol_reserves as f64 / 1e9,
+                            is_migrated: false,
+                            migration_event: None,
+                            holder_count: holder_balances
+                                .get(&Address::from(create.mint.to_bytes()))
+                                .map(|state| state.len() as i64)
+                                .unwrap_or(0),
+                            created_time: ts,
+                            last_activity_time: ts,
+                        };
 
-                            let price = PumpFun::get_open_price(&create);
-                            let mut new_mint = Mint {
-                                mint: Address::from(create.mint.to_bytes()),
-                                bonding_curve: Address::from(create.bonding_curve.to_bytes()),
-                                price,
-                                highest_price: price,
-                                name: name.clone(),
-                                symbol: symbol.clone(),
-                                uri: uri.clone(),
-                                creator: Address::from(creator.to_bytes()),
-                                creator_sold: false,
-                                creator_token_amount: 0.0,
-                                buys: 0,
-                                sells: 0,
-                                tx_count: 0,
-                                volume: 0.0,
-                                // Create events don't carry real reserves; virtual SOL is a
-                                // better initial liquidity proxy than zero.
-                                liquidity: create.virtual_sol_reserves as f64 / 1e9,
-                                is_migrated: false,
-                                migration_event: None,
-                                holder_count: holder_balances
-                                    .get(&Address::from(create.mint.to_bytes()))
-                                    .map(|state| state.len() as i64)
-                                    .unwrap_or(0),
-                                created_time: ts,
-                                last_activity_time: ts,
-                            };
-
-                            WsHandler::register_tx_observation(
-                                &seen_mint_signatures,
-                                &mut new_mint,
-                                signature.as_ref(),
-                            );
-                            WsHandler::insert_mint_snapshot(
-                                &mints,
-                                Address::from(create.mint.to_bytes()),
-                                new_mint,
-                            );
-                        })
+                        // Creation metadata is already present in the websocket event and
+                        // needs no RPC enrichment. Index it immediately so bounded trade
+                        // enrichment cannot drop the only authoritative creation time.
+                        WsHandler::register_tx_observation(
+                            &seen_mint_signatures,
+                            &mut new_mint,
+                            signature.as_ref(),
+                        );
+                        WsHandler::insert_mint_snapshot(
+                            &mints,
+                            Address::from(create.mint.to_bytes()),
+                            new_mint,
+                        );
                     }
-                    _ => tokio::spawn(async move {}),
+                    _ => {}
                 };
             }
         }
@@ -1304,12 +1433,12 @@ impl WsHandler {
     // TODO: Index new mints independently of create pool events, so whenever a buy or sell is detected and we don't have this pool in our cache (use moka)
     pub async fn subscribe_ws_pump_swap(&self) -> anyhow::Result<()> {
         // let buy_amount = config().buy_amount;
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
 
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![PUMP_SWAP_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -1332,7 +1461,7 @@ impl WsHandler {
             let pump_fun_migration_in_logs =
                 WsHandler::detect_pump_fun_to_pump_swap_migration(&raw_logs);
 
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 let signature = Signature::from_str(&sig).ok();
                 for event in events {
                     match event {
@@ -1781,12 +1910,12 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_raydium_clmm(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let program_id = crate::core::cluster::raydium_clmm_program_id(self.sol_hook.cluster);
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![program_id.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -1804,7 +1933,7 @@ impl WsHandler {
             let retries = self.token_info_retries.clone();
             let squeezer = self.squeezer.clone();
 
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 let clmm = RaydiumClmm::new(Arc::new(Keypair::new()), Arc::new(sol_hook.clone()));
                 let signature = Signature::from_str(&sig).ok();
 
@@ -2033,12 +2162,12 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_raydium_cpmm(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let program_id = crate::core::cluster::raydium_cpmm_program_id(self.sol_hook.cluster);
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![program_id.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -2073,15 +2202,23 @@ impl WsHandler {
             }
 
             let handler = self.clone();
-            tokio::spawn(async move {
-                handler.process_raydium_cpmm_observation(sig, events).await;
+            self.try_spawn_observation(async move {
+                handler
+                    .process_raydium_cpmm_observation(sig, events, None)
+                    .await;
             });
         }
 
         Ok(())
     }
 
-    async fn process_raydium_cpmm_observation(&self, sig: String, events: Vec<RaydiumCpmmEvent>) {
+    async fn process_raydium_cpmm_observation(
+        &self,
+        sig: String,
+        events: Vec<RaydiumCpmmEvent>,
+        observed_unix_time: Option<f64>,
+    ) {
+        let observed_at = observed_unix_time.unwrap_or_else(timestamp_now);
         let cpmm = RaydiumCpmm::new(Arc::new(Keypair::new()), Arc::new(self.sol_hook.clone()));
 
         let signature = match Signature::from_str(&sig) {
@@ -2200,7 +2337,7 @@ impl WsHandler {
                 migration_event: None,
                 holder_count: 0,
                 created_time: Self::UNKNOWN_CREATED_TIME,
-                last_activity_time: timestamp_now(),
+                last_activity_time: observed_at,
             }
         };
 
@@ -2257,7 +2394,7 @@ impl WsHandler {
             .await?;
 
         let mut processed = 0usize;
-        for (signature, raw_logs) in observations {
+        for (signature, raw_logs, observed_unix_time) in observations {
             if processed >= Self::LAUNCHPAD_BOOTSTRAP_PROCESS_LIMIT {
                 break;
             }
@@ -2276,7 +2413,7 @@ impl WsHandler {
                 continue;
             }
 
-            self.process_raydium_cpmm_observation(signature, events)
+            self.process_raydium_cpmm_observation(signature, events, observed_unix_time)
                 .await;
             processed += 1;
         }
@@ -2293,12 +2430,12 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_raydium_amm_v4(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let program_id = crate::core::cluster::raydium_amm_v4_program_id(self.sol_hook.cluster);
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![program_id.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -2333,9 +2470,9 @@ impl WsHandler {
             }
 
             let handler = self.clone();
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 handler
-                    .process_raydium_amm_v4_observation(sig, events)
+                    .process_raydium_amm_v4_observation(sig, events, None)
                     .await;
             });
         }
@@ -2347,7 +2484,9 @@ impl WsHandler {
         &self,
         sig: String,
         events: Vec<RaydiumAmmV4Event>,
+        observed_unix_time: Option<f64>,
     ) {
+        let observed_at = observed_unix_time.unwrap_or_else(timestamp_now);
         let amm_v4 = RaydiumAmmV4::new(Arc::new(Keypair::new()), Arc::new(self.sol_hook.clone()));
 
         let signature = match Signature::from_str(&sig) {
@@ -2445,7 +2584,7 @@ impl WsHandler {
                 migration_event: None,
                 holder_count: 0,
                 created_time: Self::UNKNOWN_CREATED_TIME,
-                last_activity_time: timestamp_now(),
+                last_activity_time: observed_at,
             }
         };
 
@@ -2549,7 +2688,7 @@ impl WsHandler {
             .await?;
 
         let mut processed = 0usize;
-        for (signature, raw_logs) in observations {
+        for (signature, raw_logs, observed_unix_time) in observations {
             if processed >= 12 {
                 break;
             }
@@ -2568,7 +2707,7 @@ impl WsHandler {
                 continue;
             }
 
-            self.process_raydium_amm_v4_observation(signature, events)
+            self.process_raydium_amm_v4_observation(signature, events, observed_unix_time)
                 .await;
             processed += 1;
         }
@@ -2585,19 +2724,19 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_raydium_launchpad(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let (mut rx_mainnet, _handle_mainnet) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls.clone(),
                 RpcTransactionLogsFilter::Mentions(vec![RAYDIUM_LAUNCHPAD_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
             .await?;
         let (mut rx_devnet, _handle_devnet) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![RAYDIUM_LAUNCHPAD_DEVNET_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -2662,12 +2801,13 @@ impl WsHandler {
                 WsHandler::launchpad_migration_target_from_logs(&raw_logs);
 
             let handler = self.clone();
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 handler
                     .process_raydium_launchpad_observation(
                         sig,
                         events,
                         launchpad_migration_target_from_logs,
+                        None,
                     )
                     .await;
             });
@@ -2681,7 +2821,9 @@ impl WsHandler {
         sig: String,
         events: Vec<RaydiumLaunchpadEvent>,
         launchpad_migration_target_from_logs: Option<&'static str>,
+        observed_unix_time: Option<f64>,
     ) {
+        let observed_at = observed_unix_time.unwrap_or_else(timestamp_now);
         let launchpad =
             RaydiumLaunchpad::new(Arc::new(Keypair::new()), Arc::new(self.sol_hook.clone()));
 
@@ -2820,7 +2962,7 @@ impl WsHandler {
                 migration_event: None,
                 holder_count: 0,
                 created_time: Self::UNKNOWN_CREATED_TIME,
-                last_activity_time: timestamp_now(),
+                last_activity_time: observed_at,
             }
         };
 
@@ -2856,7 +2998,7 @@ impl WsHandler {
             }
         }
         if mint.created_time <= Self::UNKNOWN_CREATED_TIME && observed_pool_create {
-            mint.created_time = timestamp_now();
+            mint.created_time = observed_at;
         }
 
         let holder_deltas = WsHandler::infer_holder_deltas_from_signature(
@@ -2958,7 +3100,8 @@ impl WsHandler {
                 Err(error) => {
                     warn!(
                         "raydium_launchpad bootstrap: getSignaturesForAddress({}) failed: {}",
-                        program_id, error
+                        program_id,
+                        SolHook::redact_url_queries_in_text(&error.to_string())
                     );
                 }
             }
@@ -3016,6 +3159,7 @@ impl WsHandler {
                 entry.signature,
                 events,
                 launchpad_migration_target_from_logs,
+                entry.block_time.map(|value| value as f64),
             )
             .await;
             processed += 1;
@@ -3034,11 +3178,11 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_meteora_dlmm(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![METEORA_DLMM_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -3070,7 +3214,7 @@ impl WsHandler {
             let retries = self.token_info_retries.clone();
             let squeezer = self.squeezer.clone();
 
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 let dlmm = MeteoraDlmm::new(Arc::new(Keypair::new()), Arc::new(sol_hook.clone()));
 
                 let signature = match Signature::from_str(&sig) {
@@ -3240,11 +3384,11 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_meteora_damm_v1(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![METEORA_DAMM_V1_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -3276,7 +3420,7 @@ impl WsHandler {
             let retries = self.token_info_retries.clone();
             let squeezer = self.squeezer.clone();
 
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 let damm = MeteoraDammV1::new(Arc::new(Keypair::new()), Arc::new(sol_hook.clone()));
 
                 let signature = match Signature::from_str(&sig) {
@@ -3432,11 +3576,11 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_meteora_damm_v2(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![METEORA_DAMM_V2_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -3470,9 +3614,9 @@ impl WsHandler {
             }
 
             let handler = self.clone();
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 handler
-                    .process_meteora_damm_v2_observation(sig, events)
+                    .process_meteora_damm_v2_observation(sig, events, None)
                     .await;
             });
         }
@@ -3484,7 +3628,9 @@ impl WsHandler {
         &self,
         sig: String,
         events: Vec<MeteoraDammV2Event>,
+        observed_unix_time: Option<f64>,
     ) {
+        let observed_at = observed_unix_time.unwrap_or_else(timestamp_now);
         let damm = MeteoraDammV2::new(Arc::new(Keypair::new()), Arc::new(self.sol_hook.clone()));
 
         let signature = match Signature::from_str(&sig) {
@@ -3582,7 +3728,7 @@ impl WsHandler {
                 migration_event: None,
                 holder_count: 0,
                 created_time: Self::UNKNOWN_CREATED_TIME,
-                last_activity_time: timestamp_now(),
+                last_activity_time: observed_at,
             }
         };
 
@@ -3619,7 +3765,7 @@ impl WsHandler {
             }
         }
         if mint.created_time <= Self::UNKNOWN_CREATED_TIME && observed_initialize {
-            mint.created_time = timestamp_now();
+            mint.created_time = observed_at;
         }
 
         if let Some(holder_count) =
@@ -3644,7 +3790,7 @@ impl WsHandler {
             .await?;
 
         let mut processed = 0usize;
-        for (signature, raw_logs) in observations {
+        for (signature, raw_logs, observed_unix_time) in observations {
             if processed >= Self::LAUNCHPAD_BOOTSTRAP_PROCESS_LIMIT {
                 break;
             }
@@ -3663,7 +3809,7 @@ impl WsHandler {
                 continue;
             }
 
-            self.process_meteora_damm_v2_observation(signature, events)
+            self.process_meteora_damm_v2_observation(signature, events, observed_unix_time)
                 .await;
             processed += 1;
         }
@@ -3680,11 +3826,11 @@ impl WsHandler {
     }
 
     pub async fn subscribe_ws_meteora_dbc(&self) -> anyhow::Result<()> {
-        let ws_url = self.ws_url.clone();
+        let ws_urls = self.ws_urls.clone();
         let (mut rx, _handle) = self
             .sol_hook
-            .subscribe_logs_channel(
-                &ws_url,
+            .subscribe_logs_channel_failover(
+                ws_urls,
                 RpcTransactionLogsFilter::Mentions(vec![METEORA_DBC_ID.to_string()]),
                 CommitmentConfig::processed(),
             )
@@ -3722,9 +3868,14 @@ impl WsHandler {
                 WsHandler::dbc_migration_target_from_logs(&raw_logs);
 
             let handler = self.clone();
-            tokio::spawn(async move {
+            self.try_spawn_observation(async move {
                 handler
-                    .process_meteora_dbc_observation(sig, events, dbc_migration_target_from_logs)
+                    .process_meteora_dbc_observation(
+                        sig,
+                        events,
+                        dbc_migration_target_from_logs,
+                        None,
+                    )
                     .await;
             });
         }
@@ -3737,7 +3888,9 @@ impl WsHandler {
         sig: String,
         events: Vec<MeteoraDbcEvent>,
         dbc_migration_target_from_logs: Option<&'static str>,
+        observed_unix_time: Option<f64>,
     ) {
+        let observed_at = observed_unix_time.unwrap_or_else(timestamp_now);
         let dbc = MeteoraDbc::new(Arc::new(Keypair::new()), Arc::new(self.sol_hook.clone()));
 
         let signature = match Signature::from_str(&sig) {
@@ -3836,7 +3989,7 @@ impl WsHandler {
                 migration_event: None,
                 holder_count: 0,
                 created_time: Self::UNKNOWN_CREATED_TIME,
-                last_activity_time: timestamp_now(),
+                last_activity_time: observed_at,
             }
         };
 
@@ -3873,7 +4026,7 @@ impl WsHandler {
             }
         }
         if mint.created_time <= Self::UNKNOWN_CREATED_TIME && observed_initialize {
-            mint.created_time = timestamp_now();
+            mint.created_time = observed_at;
         }
 
         if let Some(holder_count) =
@@ -3926,7 +4079,7 @@ impl WsHandler {
             .await?;
 
         let mut processed = 0usize;
-        for (signature, raw_logs) in observations {
+        for (signature, raw_logs, observed_unix_time) in observations {
             if processed >= Self::LAUNCHPAD_BOOTSTRAP_PROCESS_LIMIT {
                 break;
             }
@@ -3947,8 +4100,13 @@ impl WsHandler {
 
             let dbc_migration_target_from_logs =
                 WsHandler::dbc_migration_target_from_logs(&raw_logs);
-            self.process_meteora_dbc_observation(signature, events, dbc_migration_target_from_logs)
-                .await;
+            self.process_meteora_dbc_observation(
+                signature,
+                events,
+                dbc_migration_target_from_logs,
+                observed_unix_time,
+            )
+            .await;
             processed += 1;
         }
 
@@ -3969,7 +4127,7 @@ impl WsHandler {
         program_ids: &[Pubkey],
         signature_limit: usize,
         fetch_limit: usize,
-    ) -> anyhow::Result<Vec<(String, Vec<String>)>> {
+    ) -> anyhow::Result<Vec<(String, Vec<String>, Option<f64>)>> {
         let mut merged: HashMap<String, RpcConfirmedTransactionStatusWithSignature> =
             HashMap::new();
         for program_id in program_ids {
@@ -3995,7 +4153,9 @@ impl WsHandler {
                 Err(error) => {
                     warn!(
                         "{} bootstrap: getSignaturesForAddress({}) failed: {}",
-                        label, program_id, error
+                        label,
+                        program_id,
+                        SolHook::redact_url_queries_in_text(&error.to_string())
                     );
                 }
             }
@@ -4024,7 +4184,11 @@ impl WsHandler {
                 continue;
             }
 
-            observations.push((signature, raw_logs));
+            observations.push((
+                signature,
+                raw_logs,
+                entry.block_time.map(|value| value as f64),
+            ));
         }
 
         Ok(observations)

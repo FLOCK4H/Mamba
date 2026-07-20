@@ -387,42 +387,76 @@ impl SolHook {
         filter: RpcTransactionLogsFilter,
         commitment: CommitmentConfig,
     ) -> anyhow::Result<(Receiver<RpcLogsResponse>, tokio::task::JoinHandle<()>)> {
-        let ws = ws_url.to_string();
+        self.subscribe_logs_channel_failover(vec![ws_url.to_string()], filter, commitment)
+            .await
+    }
+
+    pub async fn subscribe_logs_channel_failover(
+        &self,
+        ws_urls: Vec<String>,
+        filter: RpcTransactionLogsFilter,
+        commitment: CommitmentConfig,
+    ) -> anyhow::Result<(Receiver<RpcLogsResponse>, tokio::task::JoinHandle<()>)> {
+        let mut endpoints = Vec::<String>::new();
+        let mut seen = HashSet::<String>::new();
+        for endpoint in ws_urls {
+            let trimmed = endpoint.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let label = Self::rpc_url_label(trimmed).to_string();
+            if seen.insert(label) {
+                endpoints.push(trimmed.to_string());
+            }
+        }
+        anyhow::ensure!(!endpoints.is_empty(), "missing websocket endpoint");
+
         let (tx, rx) = mpsc::channel::<RpcLogsResponse>(1024);
 
         let handle = tokio::spawn(async move {
-            let ws_label = ws
-                .trim()
-                .split('?')
-                .next()
-                .unwrap_or(ws.as_str())
-                .to_string();
             let cfg = RpcTransactionLogsConfig {
                 commitment: Some(commitment),
             };
 
             let mut backoff = Duration::from_millis(250);
+            let mut endpoint_index = 0usize;
             loop {
+                let ws = endpoints[endpoint_index % endpoints.len()].clone();
+                let ws_label = SolHook::rpc_url_log_label(&ws);
+                let next_endpoint = || {
+                    endpoints
+                        .get((endpoint_index + 1) % endpoints.len())
+                        .map(|value| SolHook::rpc_url_log_label(value))
+                        .unwrap_or_else(|| ws_label.clone())
+                };
                 let client = match PubsubClient::new(&ws).await {
                     Ok(c) => c,
                     Err(e) => {
-                        warn!("ws connect failed ({ws_label}): {e}");
+                        let error = Self::redact_url_queries_in_text(&e.to_string());
+                        let next_label = next_endpoint();
+                        warn!("ws connect failed ({ws_label}): {error}; retrying via {next_label}");
+                        endpoint_index = (endpoint_index + 1) % endpoints.len();
                         tokio::time::sleep(backoff).await;
                         backoff = (backoff * 2).min(Duration::from_secs(5));
                         continue;
                     }
                 };
 
-                let (mut stream, _unsub) =
-                    match client.logs_subscribe(filter.clone(), cfg.clone()).await {
-                        Ok(p) => p,
-                        Err(e) => {
-                            warn!("subscribe failed ({ws_label}): {e}");
-                            tokio::time::sleep(backoff).await;
-                            backoff = (backoff * 2).min(Duration::from_secs(5));
-                            continue;
-                        }
-                    };
+                let (mut stream, _unsub) = match client
+                    .logs_subscribe(filter.clone(), cfg.clone())
+                    .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let error = Self::redact_url_queries_in_text(&e.to_string());
+                        let next_label = next_endpoint();
+                        warn!("subscribe failed ({ws_label}): {error}; retrying via {next_label}");
+                        endpoint_index = (endpoint_index + 1) % endpoints.len();
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(5));
+                        continue;
+                    }
+                };
 
                 backoff = Duration::from_millis(250);
                 while let Some(msg) = stream.next().await {
@@ -430,6 +464,7 @@ impl SolHook {
                         return;
                     }
                 }
+                endpoint_index = (endpoint_index + 1) % endpoints.len();
             }
         });
 
@@ -447,14 +482,16 @@ impl SolHook {
             let client = match PubsubClient::new(&ws).await {
                 Ok(c) => c,
                 Err(e) => {
-                    warn!("ws connect failed: {e}");
+                    let error = Self::redact_url_queries_in_text(&e.to_string());
+                    warn!("ws connect failed: {error}");
                     return;
                 }
             };
             let (mut stream, _unsub) = match client.slot_subscribe().await {
                 Ok(p) => p,
                 Err(e) => {
-                    warn!("subscribe failed: {e}");
+                    let error = Self::redact_url_queries_in_text(&e.to_string());
+                    warn!("subscribe failed: {error}");
                     return;
                 }
             };
@@ -570,8 +607,57 @@ impl SolHook {
             .is_some())
     }
 
-    fn rpc_url_label(url: &str) -> &str {
+    pub(crate) fn rpc_url_label(url: &str) -> &str {
         url.split('?').next().unwrap_or(url)
+    }
+
+    pub(crate) fn rpc_url_log_label(url: &str) -> String {
+        let without_query = Self::rpc_url_label(url.trim());
+        let Some((scheme, rest)) = without_query.split_once("://") else {
+            return "<redacted-rpc-endpoint>".to_string();
+        };
+        let slash_index = rest.find('/').unwrap_or(rest.len());
+        let authority = &rest[..slash_index];
+        let host = authority
+            .rsplit_once('@')
+            .map(|(_, host)| host)
+            .unwrap_or(authority);
+        let path = &rest[slash_index..];
+        let safe_path = match path {
+            "" => "",
+            "/" => "/",
+            _ => "/<redacted>",
+        };
+        format!("{scheme}://{host}{safe_path}")
+    }
+
+    pub(crate) fn redact_url_queries_in_text(input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
+        let mut rest = input;
+
+        while let Some(start) = Self::find_url_start(rest) {
+            output.push_str(&rest[..start]);
+            let tail = &rest[start..];
+            let end = tail
+                .find(|ch: char| ch.is_whitespace() || matches!(ch, ')' | ',' | ';'))
+                .unwrap_or(tail.len());
+            output.push_str(&Self::rpc_url_log_label(&tail[..end]));
+            rest = &tail[end..];
+        }
+
+        output.push_str(rest);
+        output
+    }
+
+    pub(crate) fn redacted_error(error: &anyhow::Error) -> String {
+        Self::redact_url_queries_in_text(&error.to_string())
+    }
+
+    fn find_url_start(input: &str) -> Option<usize> {
+        ["https://", "http://", "wss://", "ws://"]
+            .iter()
+            .filter_map(|needle| input.find(needle))
+            .min()
     }
 
     #[cfg(test)]
@@ -635,7 +721,11 @@ impl SolHook {
         cooling.sort_by_key(|client| Self::read_rpc_preference_score(operation, &client.url()));
 
         if ready.is_empty() {
-            clients.to_vec()
+            // Every provider is already cooling after a retryable failure. Probe one
+            // preferred endpoint instead of multiplying each websocket enrichment
+            // call across the entire exhausted pool.
+            cooling.truncate(1);
+            cooling
         } else {
             ready.extend(cooling);
             ready
@@ -654,8 +744,7 @@ impl SolHook {
             match op(client.clone()).await {
                 Ok(value) => return Ok(value),
                 Err(error) => {
-                    let retryable = idx + 1 < clients.len()
-                        && Self::rpc_transport_error_is_retryable(&error.to_string());
+                    let retryable = idx + 1 < clients.len() && Self::rpc_error_is_retryable(&error);
                     if retryable {
                         Self::record_retryable_rpc_cooldown(&client.url());
                         let next_url = clients
@@ -665,9 +754,9 @@ impl SolHook {
                         warn!(
                             "rpc {} failed on {}: {}; retrying via {}",
                             operation,
-                            Self::rpc_url_label(&client.url()),
-                            error,
-                            Self::rpc_url_label(&next_url)
+                            Self::rpc_url_log_label(&client.url()),
+                            Self::redacted_error(&error),
+                            Self::rpc_url_log_label(&next_url)
                         );
                         last_retryable_error = Some(error);
                         continue;
@@ -699,8 +788,7 @@ impl SolHook {
                 Ok(Some(value)) => return Ok(Some(value)),
                 Ok(None) => return Ok(None),
                 Err(error) => {
-                    let retryable = idx + 1 < clients.len()
-                        && Self::rpc_transport_error_is_retryable(&error.to_string());
+                    let retryable = idx + 1 < clients.len() && Self::rpc_error_is_retryable(&error);
                     if retryable {
                         Self::record_retryable_rpc_cooldown(&client.url());
                         let next_url = clients
@@ -710,9 +798,9 @@ impl SolHook {
                         warn!(
                             "rpc {} failed on {}: {}; retrying via {}",
                             operation,
-                            Self::rpc_url_label(&client.url()),
-                            error,
-                            Self::rpc_url_label(&next_url)
+                            Self::rpc_url_log_label(&client.url()),
+                            Self::redacted_error(&error),
+                            Self::rpc_url_log_label(&next_url)
                         );
                         last_retryable_error = Some(error);
                         continue;
@@ -837,11 +925,21 @@ impl SolHook {
         lower.contains("429")
             || lower.contains("too many requests")
             || lower.contains("rate limit")
+            || lower.contains("http status 401")
+            || lower.contains("http status 403")
+            || lower.contains("unauthorized")
+            || lower.contains("forbidden")
             || lower.contains("timed out")
             || lower.contains("timeout")
             || lower.contains("connection")
             || lower.contains("unavailable")
             || lower.contains("overloaded")
+    }
+
+    fn rpc_error_is_retryable(error: &anyhow::Error) -> bool {
+        error
+            .chain()
+            .any(|cause| Self::rpc_transport_error_is_retryable(&cause.to_string()))
     }
 
     fn default_send_transaction_config() -> RpcSendTransactionConfig {
@@ -2781,6 +2879,76 @@ mod tests {
             SolHook::rpc_url_label("https://mainnet.helius-rpc.com/?api-key=secret"),
             "https://mainnet.helius-rpc.com/"
         );
+    }
+
+    #[test]
+    fn test_redact_url_queries_in_text_strips_embedded_provider_keys() {
+        let redacted = SolHook::redact_url_queries_in_text(
+            "HTTP status 429 for url (https://mainnet.helius-rpc.com/?api-key=secret); retrying via https://rpc.example.com/?token=secret",
+        );
+
+        assert_eq!(
+            redacted,
+            "HTTP status 429 for url (https://mainnet.helius-rpc.com/); retrying via https://rpc.example.com/"
+        );
+        assert!(!redacted.contains("secret"));
+    }
+
+    #[test]
+    fn test_rpc_log_redaction_strips_path_embedded_provider_keys() {
+        let redacted = SolHook::redact_url_queries_in_text(
+            "request failed for https://provider.example.com/private-api-key/segment",
+        );
+
+        assert_eq!(
+            redacted,
+            "request failed for https://provider.example.com/<redacted>"
+        );
+        assert!(!redacted.contains("private-api-key"));
+    }
+
+    #[test]
+    fn test_all_cooling_rpc_pool_probes_one_endpoint() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        let previous_urls = std::env::var("MAMBA_API_HTTP_URLS").ok();
+        unsafe {
+            std::env::set_var(
+                "MAMBA_API_HTTP_URLS",
+                "https://cool-a.invalid,https://cool-b.invalid,https://cool-c.invalid",
+            )
+        };
+
+        let sol = SolHook::new("https://cool-a.invalid".to_string());
+        for client in sol.read_rpc_clients() {
+            SolHook::record_retryable_rpc_cooldown(&client.url());
+        }
+
+        let attempts = sol.read_rpc_clients_for_attempts("getTransactionParsed");
+        assert_eq!(attempts.len(), 1);
+
+        if let Ok(mut cooldowns) = SolHook::rpc_endpoint_cooldowns().lock() {
+            for client in sol.read_rpc_clients() {
+                cooldowns.remove(SolHook::rpc_url_label(&client.url()));
+            }
+        }
+        restore_env_var("MAMBA_API_HTTP_URLS", previous_urls);
+    }
+
+    #[test]
+    fn test_nested_provider_forbidden_error_is_retryable() {
+        let error =
+            anyhow::anyhow!("HTTP status 403 for url (https://rpc.example.com/?api-key=secret)")
+                .context("getTokenAccountsByOwner(spl-token) failed");
+
+        assert!(SolHook::rpc_error_is_retryable(&error));
+    }
+
+    #[test]
+    fn test_invalid_rpc_parameters_are_not_retryable() {
+        let error = anyhow::anyhow!("Invalid params: invalid owner")
+            .context("getTokenAccountsByOwner(spl-token) failed");
+
+        assert!(!SolHook::rpc_error_is_retryable(&error));
     }
 
     #[test]

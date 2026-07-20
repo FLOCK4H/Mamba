@@ -458,9 +458,18 @@ impl PumpFun {
         bonding_curve: &Pubkey,
     ) -> anyhow::Result<(BondingCurveAccount, f64)> {
         let state = self.fetch_state(bonding_curve).await?;
+        anyhow::ensure!(
+            !state.complete,
+            "pump.fun bonding curve is complete; resolve the migrated route before swapping"
+        );
+        anyhow::ensure!(
+            state.virtual_sol_reserves > 0 && state.virtual_token_reserves > 0,
+            "pump.fun bonding curve has invalid virtual reserves"
+        );
         let vsr = state.virtual_sol_reserves as f64 / 1e9;
         let vtr = state.virtual_token_reserves as f64 / 1e6;
         let price = vsr / vtr;
+        anyhow::ensure!(price.is_finite() && price > 0.0, "invalid pump.fun price");
         Ok((state, price))
     }
 

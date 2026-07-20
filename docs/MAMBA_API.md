@@ -39,7 +39,24 @@ cargo run --bin mamba_api --release
 | `MAMBA_API_HTTP_URLS` | Comma-separated HTTP RPC endpoints (same cluster) |
 | `MAMBA_API_WS_URLS` | Comma-separated WebSocket RPC endpoints (same cluster) |
 
-The API rotates reads across the full HTTP pool and temporarily cools down endpoints that return `429` or transport errors. High-volume websocket enrichment prefers non-Helius endpoints when both Helius and non-Helius URLs are present, reducing parsed-transaction throttling on mainnet.
+The API rotates reads across the full HTTP pool and temporarily cools down endpoints that return `429`
+or transport errors. Retry classification inspects the complete error chain, so a contextual operation
+label cannot hide a nested provider `401`, `403`, `429`, timeout, or transport failure and stop failover.
+Pool-position retry diagnostics redact both the selected provider URL and nested transport error before
+logging or returning an API error. Market websocket subscriptions start from a stable endpoint slot, then
+fail over through the remaining websocket RPC pool when connect, subscribe, or stream-end failures occur.
+High-volume websocket enrichment prefers non-Helius endpoints when both Helius and non-Helius URLs are
+present, reducing parsed-transaction throttling on mainnet. If every endpoint is already cooling, Mamba
+probes one preferred endpoint instead of multiplying the same request across the exhausted pool.
+
+Websocket parsing and RPC enrichment run on a runtime separate from the Axum control plane. Enrichment is
+bounded by a shared request-rate and in-flight budget, while each market has a small observation-work
+budget. When a market exceeds that budget, Mamba drops excess enrichment work and reports the cumulative
+count through `GET /health`; subsequent fresh observations continue to be accepted.
+
+At startup, the API tries `getGenesisHash` across the configured HTTP pool. If every endpoint is
+temporarily exhausted, it logs a redacted diagnostic and infers the cluster from the configured RPC URLs
+so the HTTP API can still bind while read calls continue using the normal pool/failover behavior.
 
 For busy mainnet markets like `pump_fun` and `pump_swap`, use at least 3 HTTP RPCs across 2 providers. Two URLs on the same host are not enough diversity for sustained loads.
 
@@ -48,6 +65,11 @@ For busy mainnet markets like `pump_fun` and `pump_swap`, use at least 3 HTTP RP
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MAMBA_API_BIND_ADDR` | `127.0.0.1:8787` | Listen address |
+| `MAMBA_API_WORKER_THREADS` | max of detected CPUs or `4` | Tokio worker threads dedicated to HTTP/API control work |
+| `MAMBA_API_MARKET_WORKER_THREADS` | max of detected CPUs or `2` | Separate Tokio worker pool for websocket parsing and market enrichment |
+| `MAMBA_WS_RPC_MAX_RPS` | `8` | Shared websocket-enrichment RPC start-rate across all active markets; legacy `SQUEEZE_MAX_RPS` overrides it when set |
+| `MAMBA_WS_RPC_MAX_IN_FLIGHT` | `4` | Shared concurrent RPC-enrichment budget across all active markets |
+| `MAMBA_WS_OBSERVATION_MAX_IN_FLIGHT` | `2` | Concurrent observation workers per market before excess work is dropped |
 | `MAMBA_API_ROUTE_BASE` | `/mamba-api` | Route prefix |
 | `MAMBA_API_ENABLE_LIVE_SENDS` | `false` | Enable transaction submission |
 | `MAMBA_API_ALLOW_PRIVATE_NETWORK_CLIENTS` | `false` | Accept requests from LAN clients |
@@ -76,7 +98,7 @@ Non-2xx responses return:
 |-------|-----------|
 | Health | `GET /health`, `GET /docs`, `GET /markets` |
 | Websocket | `POST /ws/subscribe`, `POST /ws/unsubscribe`, `GET /ws/subscriptions`, `GET /ws/stream` |
-| Market data | `GET /mints`, `GET /mints/{mint}/route`, `GET /mints/{mint}/creator`, `GET /mints/{mint}/metadata`, `POST /mints/metadata-batch` |
+| Market data | `GET /mints`, `GET /mints/{mint}/activity`, `GET /mints/{mint}/route`, `GET /mints/{mint}/creator`, `GET /mints/{mint}/metadata`, `POST /mints/metadata-batch` |
 | Swaps | `POST /swap` |
 | Create | `GET /create/methods`, `POST /create/build`, `POST /create/execute`, Raydium Launchpad config routes |
 | Pools | `GET /pool/methods`, `POST /pool/build`, `POST /pool/execute`, `GET /pool/positions`, `POST /pool/manage/build`, `POST /pool/manage/execute` |
@@ -108,6 +130,7 @@ curl -sS -H "x-api-key: $MAMBA_API_KEY" "$MAMBA_API_BASE/health"
   "selected_wallet_count": 1,
   "active_wallet_pubkey": "7wY9...rK3p",
   "active_ws_subscriptions": ["pump_fun", "pump_swap"],
+  "dropped_ws_observations": 0,
   "timestamp_unix_ms": 1760872800123
 }
 ```
@@ -302,6 +325,113 @@ curl -sS \
 
 Response uses the same mint snapshot format as `/ws/stream` messages.
 
+For Pump.fun, `created_time` is taken directly from the parsed create event and the mint is inserted into
+the cache before optional RPC enrichment is scheduled. This keeps creation age available even when the
+bounded observation workers are busy. Mints first discovered through later trade/bootstrap paths can
+still have `created_time: null` because Mamba does not fabricate a creation timestamp.
+
+### `GET /mints/{mint}/activity`
+
+Returns recent successful mint transactions decoded into trades plus a current holder leaderboard. This
+route is independent of the short-lived websocket observation counters used by `/mints`: it reads recent
+transaction history from the configured Helius RPC endpoint, decodes exact Pump.fun and PumpSwap events,
+and aggregates Helius DAS token accounts by owner. Each decoded trade includes its execution price in
+SOL per token and, when token supply is available, the corresponding SOL market cap. Provider URLs and
+credentials are never returned.
+
+**Query params:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `market` | string | Optional market label returned with the response |
+| `pool` | pubkey | Optional pool or bonding-curve owner to exclude from the human holder leaderboard |
+| `trade_limit` | integer | Recent transaction window, clamped to 1..250; default 100 |
+| `holder_limit` | integer | Holder rows returned, clamped to 1..10000; default 1000 |
+
+The holder index reads at most 50,000 token accounts per request. `holders_complete` is true only when the
+provider index ended and every distinct funded owner fits in `holder_limit`. `warnings`, source fields, and
+completeness flags must be preserved by clients; an unavailable provider returns an honest partial response
+instead of converting websocket observations into fake totals. Results are cached for eight seconds.
+
+```bash
+curl -sS \
+  -H "x-api-key: $MAMBA_API_KEY" \
+  "$MAMBA_API_BASE/mints/CBExgJAHsQQz397rZjPUB88kcgkJNRYyDXtbakcdpump/activity?market=pump_fun&trade_limit=100&holder_limit=10000"
+```
+
+```json
+{
+  "mint": "CBExgJAHsQQz397rZjPUB88kcgkJNRYyDXtbakcdpump",
+  "trade_count": 50,
+  "buy_count": 30,
+  "sell_count": 20,
+  "volume_sol": 92.423,
+  "holder_count": 8,
+  "holders_complete": true,
+  "holders_source": "helius_das",
+  "trades_complete": true,
+  "trades_source": "helius_rpc",
+  "trades": [
+    {
+      "signature": "...",
+      "side": "buy",
+      "signer": "...",
+      "token_amount": 678200.0,
+      "sol_amount": 0.098765,
+      "price_sol": 1.456576231e-7,
+      "market_cap_sol": 145.6576231,
+      "timestamp": 1784210400,
+      "holding_pct": 0.06782,
+      "source": "pump_fun_event"
+    }
+  ],
+  "holders": [
+    {
+      "rank": 1,
+      "owner": "...",
+      "token_amount": 56037561.0,
+      "holding_pct": 5.6037561,
+      "token_accounts": 1
+    }
+  ],
+  "warnings": []
+}
+```
+
+### `GET /fees/priority`
+
+Estimates the base and priority fee for a market-specific example transaction.
+
+**Query params:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `market` | string | Currently defaults to `pump_fun`; other values return a Pump.fun-shaped sample until market-specific samples are added |
+| `level` | string | `low`, `medium`, `high`, `turbo`, or `max`; default `medium` |
+| `compute_units` | integer | Optional compute-unit budget, clamped to 1..1400000; default is the shared 300000 swap budget |
+
+```bash
+curl -sS \
+  -H "x-api-key: $MAMBA_API_KEY" \
+  "$MAMBA_API_BASE/fees/priority?market=pump_fun&level=medium"
+```
+
+```json
+{
+  "market": "pump_fun",
+  "level": "medium",
+  "compute_units": 300000,
+  "micro_lamports_per_cu": 1000,
+  "priority_fee_lamports": 300,
+  "priority_fee_sol": 0.0000003,
+  "base_fee_lamports": 5000,
+  "total_fee_lamports": 5300,
+  "total_fee_sol": 0.0000053,
+  "sample_kind": "pump_fun_buy",
+  "sample_mint": "..."
+}
+```
+
 ### `GET /mints/{mint}/route`
 
 Resolves a swap route (market, pool, creator) with a price snapshot.
@@ -425,7 +555,7 @@ Unified swap surface for all 10 markets. Plans a route by default; executes only
 | `skip_low_lq_pools` | no | | Reject low-LQ fallback routes |
 | `use_idempotent` | no | | Use idempotent ATA creation where supported |
 | `retries` | no | | Retry count for sell transport failures |
-| `priority_fee_level` | no | | `env`, `low`, `medium`, `high`, `turbo`, `max`, or `custom` |
+| `priority_fee_level` | no | | `low`, `medium`, `high`, `turbo`, `max`, or `custom` |
 | `priority_fee_sol` | no | | Decimal SOL amount (only with `custom` level) |
 | `wallet` | no | | Pubkey to execute from (execute only) |
 | `rpc_url` | no | | RPC override (planning OK, live sends enforce same-cluster) |
@@ -433,7 +563,7 @@ Unified swap surface for all 10 markets. Plans a route by default; executes only
 | `swqos_settings` | when swqos=true | | SWQoS provider configuration |
 
 **Notes on fee overrides:**
-- `priority_fee_level=env` keeps the default from `.env` (`FEE_LEVEL`)
+- Omit `priority_fee_level` to use the API default configured by `FEE_LEVEL`; clients should send an explicit level when showing a fee selector
 - `priority_fee_sol` is converted into the swap path's shared 300,000 compute-unit budget and respects `MAX_FEE` when set
 - Fee overrides only matter when `execute=true`
 
@@ -540,7 +670,7 @@ curl -sS \
 
 ### `GET /create/methods`
 
-Returns method specs with required/optional fields and `execute_generated_fields` (signers that Mamba generates internally in execute mode).
+Returns method specs with required/optional fields and `execute_generated_fields` (signers that Mamba can generate internally).
 
 ```bash
 curl -sS -H "x-api-key: $MAMBA_API_KEY" "$MAMBA_API_BASE/create/methods"
@@ -550,18 +680,44 @@ curl -sS -H "x-api-key: $MAMBA_API_KEY" "$MAMBA_API_BASE/create/methods"
 [
   {
     "method": "pump_fun",
-    "required_fields": ["method", "payer", "mint", "name", "symbol", "uri"],
+    "required_fields": ["method", "payer", "name", "symbol", "uri"],
     "optional_fields": ["auto_buy.buy_sol", "auto_buy.slippage_pct", "simulate", "rpc_url"],
     "execute_generated_fields": ["mint"]
   }
 ]
 ```
 
+### `POST /create/ipfs-upload`
+
+Uploads token metadata and an image through Mamba's create/IPFS path.
+
+The request is multipart form data with `file`, `name`, and `symbol` required. Optional fields are
+`description`, `twitter`, `telegram`, `website`, and `show_name`. Image uploads are limited to 10 MB and
+must use `image/png`, `image/jpeg`, `image/gif`, `image/webp`, or `image/svg+xml`.
+
+```bash
+curl -sS \
+  -H "x-api-key: $MAMBA_API_KEY" \
+  -F "file=@token.png;type=image/png" \
+  -F "name=Example" \
+  -F "symbol=EX" \
+  "$MAMBA_API_BASE/create/ipfs-upload"
+```
+
+```json
+{
+  "metadataUri": "ipfs://..."
+}
+```
+
 ### `POST /create/build`
 
-Builds an unsigned token-creation transaction.
+Builds an unsigned token-creation transaction. If `mint` is omitted, Mamba generates a mint keypair,
+stores the signer in its private local signer store, and returns the public key in `generated_signers`.
+This supports review-first web flows without exposing the mint private key.
 
-**Response fields:** `transaction` (base64), `required_signers`, `derived_addresses`, `mint_token_program`, optional `simulation`.
+**Response fields:** `transaction` (base64), `required_signers`, `derived_addresses`,
+`mint_token_program`, `generated_signers`, optional `simulation`.
 
 ```bash
 curl -sS \
@@ -570,7 +726,6 @@ curl -sS \
   -d '{
     "method": "pump_fun",
     "payer": "<PAYER_PUBKEY>",
-    "mint": "<NEW_MINT_PUBKEY>",
     "name": "Example",
     "symbol": "EX",
     "uri": "https://example.com/token.json",
@@ -586,6 +741,7 @@ curl -sS \
   "required_signers": ["<PAYER_PUBKEY>", "<NEW_MINT_PUBKEY>"],
   "derived_addresses": { "metadata": "..." },
   "mint_token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "generated_signers": { "mint": "<NEW_MINT_PUBKEY>" },
   "simulation": { "ok": true, "err": null, "units_consumed": 123456, "logs": [] }
 }
 ```
@@ -1059,6 +1215,9 @@ curl -sS \
 ## Wallet cleaner
 
 The cleaner previews token accounts, classifies them (unwrap WSOL, burn and close, close empty, or skip), and builds batched cleanup transactions.
+
+SPL Token and Token-2022 account reads run sequentially to avoid doubling a wallet preview's instantaneous
+provider load. Each read retains HTTP-pool failover through the full nested RPC error chain.
 
 ### `GET /wallets/clean/preview`
 

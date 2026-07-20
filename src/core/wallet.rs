@@ -667,17 +667,25 @@ pub async fn preview_wallet_clean(
     rpc: &RpcClient,
     owner: Pubkey,
 ) -> anyhow::Result<WalletCleanPreview> {
-    let spl_accounts = rpc.get_token_accounts_by_owner_with_commitment(
-        &owner,
-        TokenAccountsFilter::ProgramId(spl_token::id()),
-        CommitmentConfig::confirmed(),
-    );
-    let token_2022_accounts = rpc.get_token_accounts_by_owner_with_commitment(
-        &owner,
-        TokenAccountsFilter::ProgramId(spl_token_2022::id()),
-        CommitmentConfig::confirmed(),
-    );
-    let (spl_accounts, token_2022_accounts) = tokio::join!(spl_accounts, token_2022_accounts);
+    // Keep these reads sequential. Some provider plans throttle two simultaneous
+    // getTokenAccountsByOwner calls even for an empty wallet, which made the
+    // cleaner preview fail before the RPC pool could reach a healthy fallback.
+    let spl_accounts = rpc
+        .get_token_accounts_by_owner_with_commitment(
+            &owner,
+            TokenAccountsFilter::ProgramId(spl_token::id()),
+            CommitmentConfig::confirmed(),
+        )
+        .await
+        .context("getTokenAccountsByOwner(spl-token) failed")?;
+    let token_2022_accounts = rpc
+        .get_token_accounts_by_owner_with_commitment(
+            &owner,
+            TokenAccountsFilter::ProgramId(spl_token_2022::id()),
+            CommitmentConfig::confirmed(),
+        )
+        .await
+        .context("getTokenAccountsByOwner(token-2022) failed")?;
 
     let mut entries = Vec::new();
     let mut push_entries = |accounts: Vec<RpcKeyedAccount>| -> anyhow::Result<()> {
@@ -688,16 +696,8 @@ pub async fn preview_wallet_clean(
         }
         Ok(())
     };
-    push_entries(
-        spl_accounts
-            .context("getTokenAccountsByOwner(spl-token) failed")?
-            .value,
-    )?;
-    push_entries(
-        token_2022_accounts
-            .context("getTokenAccountsByOwner(token-2022) failed")?
-            .value,
-    )?;
+    push_entries(spl_accounts.value)?;
+    push_entries(token_2022_accounts.value)?;
 
     entries.sort_by(|left, right| {
         wallet_clean_action_rank(left.action)

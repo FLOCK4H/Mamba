@@ -662,8 +662,10 @@ impl Swaps {
                 warn!(
                     "meteora dbc migration hint lookup failed for mint {} on primary rpc: {}; retrying via {}",
                     mint,
-                    primary_error,
-                    self.readonly_fallback_rpc_url().unwrap_or("<none>")
+                    SolHook::redacted_error(&primary_error),
+                    self.readonly_fallback_rpc_url()
+                        .map(SolHook::rpc_url_label)
+                        .unwrap_or("<none>")
                 );
                 fallback_dbc.find_pools_by_mint(mint, quote_mint).await?
             }
@@ -678,7 +680,10 @@ impl Swaps {
                             Err(fallback_error) => {
                                 warn!(
                                     "failed to inspect meteora dbc migration state for mint {} pool {} on primary rpc: {}; fallback rpc also failed: {}",
-                                    mint, pool, error, fallback_error
+                                    mint,
+                                    pool,
+                                    SolHook::redacted_error(&error),
+                                    SolHook::redacted_error(&fallback_error)
                                 );
                                 continue;
                             }
@@ -727,8 +732,10 @@ impl Swaps {
                 warn!(
                     "raydium launchpad migration hint lookup failed for mint {} on primary rpc: {}; retrying via {}",
                     mint,
-                    primary_error,
-                    self.readonly_fallback_rpc_url().unwrap_or("<none>")
+                    SolHook::redacted_error(&primary_error),
+                    self.readonly_fallback_rpc_url()
+                        .map(SolHook::rpc_url_label)
+                        .unwrap_or("<none>")
                 );
                 fallback_launchpad
                     .find_pools_by_mint(mint, quote_mint)
@@ -745,7 +752,10 @@ impl Swaps {
                             Err(fallback_error) => {
                                 warn!(
                                     "failed to inspect raydium launchpad migration state for mint {} pool {} on primary rpc: {}; fallback rpc also failed: {}",
-                                    mint, pool, error, fallback_error
+                                    mint,
+                                    pool,
+                                    SolHook::redacted_error(&error),
+                                    SolHook::redacted_error(&fallback_error)
                                 );
                                 continue;
                             }
@@ -1729,7 +1739,7 @@ impl Swaps {
                             "{} mint route failed for {}: {}",
                             market.as_str(),
                             mint,
-                            error
+                            SolHook::redacted_error(&error)
                         );
                         continue;
                     }
