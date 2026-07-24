@@ -48,6 +48,9 @@ fail over through the remaining websocket RPC pool when connect, subscribe, or s
 High-volume websocket enrichment prefers non-Helius endpoints when both Helius and non-Helius URLs are
 present, reducing parsed-transaction throttling on mainnet. If every endpoint is already cooling, Mamba
 probes one preferred endpoint instead of multiplying the same request across the exhausted pool.
+Recent-signature discovery and adapter account-state reads use this same resilient HTTP pool. They must
+not pin themselves to the primary RPC because a single provider `429` would otherwise leave a subscribed,
+low-activity market with an empty in-memory mint cache.
 
 Websocket parsing and RPC enrichment run on a runtime separate from the Axum control plane. Enrichment is
 bounded by a shared request-rate and in-flight budget, while each market has a small observation-work
@@ -79,6 +82,12 @@ For busy mainnet markets like `pump_fun` and `pump_swap`, use at least 3 HTTP RP
 | `FEE_LEVEL` | `medium` | Default priority fee level |
 | `MAX_FEE` | | Optional cap on computed/custom priority fee (in SOL) |
 | `MAMBA_ROUTE_LOOKUP_TIMEOUT_SECS` | `15` | Route discovery timeout |
+| `MAMBA_SEARCH_DISCOVERY_TIMEOUT_SECS` | `15` | Per-market, per-RPC timeout used by concurrent Mamba Search discovery |
+| `MAMBA_SEARCH_RPC_CONCURRENCY` | `3` | Ordered configured RPC prefix used per search |
+| `MAMBA_SEARCH_POOL_CONCURRENCY` | `4` | Maximum pool inspections in flight per search |
+| `MAMBA_SEARCH_GLOBAL_POOL_CONCURRENCY` | `8` | Maximum pool inspections across simultaneous searches |
+| `MAMBA_SEARCH_HISTORY_SIGNATURE_LIMIT` | `25` | Bounded pool-history signature window |
+| `MAMBA_SEARCH_INSPECTION_TIMEOUT_SECS` | `8` | Per-RPC timeout used when inspecting one pool field or reading mint identity |
 | `MAMBA_SWAP_CONFIRM_TIMEOUT_SECS` | `60` | Transaction confirmation timeout |
 | `AUTO_ACCEPT_LOW_LQ_POOLS` | `false` | Skip low-liquidity confirmation prompts |
 
@@ -98,7 +107,7 @@ Non-2xx responses return:
 |-------|-----------|
 | Health | `GET /health`, `GET /docs`, `GET /markets` |
 | Websocket | `POST /ws/subscribe`, `POST /ws/unsubscribe`, `GET /ws/subscriptions`, `GET /ws/stream` |
-| Market data | `GET /mints`, `GET /mints/{mint}/activity`, `GET /mints/{mint}/route`, `GET /mints/{mint}/creator`, `GET /mints/{mint}/metadata`, `POST /mints/metadata-batch` |
+| Market data | `GET /mints`, `GET /mamba-search/{mint}`, `GET /mamba-search/{mint}/stream`, `GET /mints/{mint}/activity`, `GET /mints/{mint}/route`, `GET /mints/{mint}/creator`, `GET /mints/{mint}/metadata`, `POST /mints/metadata-batch` |
 | Swaps | `POST /swap` |
 | Create | `GET /create/methods`, `POST /create/build`, `POST /create/execute`, Raydium Launchpad config routes |
 | Pools | `GET /pool/methods`, `POST /pool/build`, `POST /pool/execute`, `GET /pool/positions`, `POST /pool/manage/build`, `POST /pool/manage/execute` |
@@ -177,7 +186,7 @@ curl -sS -H "x-api-key: $MAMBA_API_KEY" "$MAMBA_API_BASE/markets"
 
 ## Websocket control
 
-The mint cache is websocket-backed. `GET /mints` and `GET /ws/stream` return data only after at least one market subscription is active.
+The mint cache is websocket-backed. `GET /mints` and `GET /ws/stream` return data only after at least one market subscription is active. Raydium Launchpad, Raydium CLMM, and Meteora DBC also replay a bounded set of recent program transactions when their subscription starts. This hydrates a fresh process without inventing rows or waiting indefinitely for the next low-frequency live event; normal websocket observations remain the ongoing source of updates.
 
 ### `POST /ws/subscribe`
 
@@ -335,23 +344,30 @@ still have `created_time: null` because Mamba does not fabricate a creation time
 Returns recent successful mint transactions decoded into trades plus a current holder leaderboard. This
 route is independent of the short-lived websocket observation counters used by `/mints`: it reads recent
 transaction history from the configured Helius RPC endpoint, decodes exact Pump.fun and PumpSwap events,
-and aggregates Helius DAS token accounts by owner. Each decoded trade includes its execution price in
-SOL per token and, when token supply is available, the corresponding SOL market cap. Provider URLs and
-credentials are never returned.
+and aggregates Helius DAS token accounts by owner. When `pool` is supplied, only transactions whose account
+list contains that exact pool are decoded, preventing another pool for the same mint from contaminating the
+selected market's activity. The generic balance fallback derives token and SOL deltas from the transaction
+signer rather than the liquidity-pool owner, but deliberately leaves `price_sol` and `market_cap_sol` null
+because routed net wallet deltas are not an exact pool execution price. Every trade exposes
+`price_authoritative`; only exact decoded market events set it to true. Exact decoded trades include their
+execution price in SOL per token and, when token supply is available, the corresponding SOL market cap.
+Provider URLs and credentials are never returned.
 
 **Query params:**
 
 | Param | Type | Description |
 |-------|------|-------------|
 | `market` | string | Optional market label returned with the response |
-| `pool` | pubkey | Optional pool or bonding-curve owner to exclude from the human holder leaderboard |
+| `pool` | pubkey | Optional exact transaction scope; also excluded from the human holder leaderboard |
 | `trade_limit` | integer | Recent transaction window, clamped to 1..250; default 100 |
 | `holder_limit` | integer | Holder rows returned, clamped to 1..10000; default 1000 |
 
 The holder index reads at most 50,000 token accounts per request. `holders_complete` is true only when the
-provider index ended and every distinct funded owner fits in `holder_limit`. `warnings`, source fields, and
-completeness flags must be preserved by clients; an unavailable provider returns an honest partial response
-instead of converting websocket observations into fake totals. Results are cached for eight seconds.
+provider index ended and every distinct funded owner fits in `holder_limit`. The response echoes `pool` and
+sets `trades_scoped_to_pool: true` only when this exact filter was requested and applied. `warnings`, source
+fields, and completeness flags must be preserved by clients; an unavailable provider returns an honest
+partial response instead of converting websocket observations into fake totals. Results are cached for
+eight seconds.
 
 ```bash
 curl -sS \
@@ -362,6 +378,9 @@ curl -sS \
 ```json
 {
   "mint": "CBExgJAHsQQz397rZjPUB88kcgkJNRYyDXtbakcdpump",
+  "market": "pump_fun",
+  "pool": "pool-public-key",
+  "trades_scoped_to_pool": true,
   "trade_count": 50,
   "buy_count": 30,
   "sell_count": 20,
@@ -380,6 +399,7 @@ curl -sS \
       "sol_amount": 0.098765,
       "price_sol": 1.456576231e-7,
       "market_cap_sol": 145.6576231,
+      "price_authoritative": true,
       "timestamp": 1784210400,
       "holding_pct": 0.06782,
       "source": "pump_fun_event"
@@ -469,6 +489,20 @@ curl -sS \
   "liquidity_warning": null
 }
 ```
+
+### `GET /mamba-search/{mint}` and `GET /mamba-search/{mint}/stream`
+
+Discovers every WSOL pool for a mint across all 10 supported markets. Discovery starts concurrently on every configured RPC and uses the first successful response per market. Each pool begins inspection immediately while other markets are still searching; price, exact mint and SOL reserves, creator, timing, safe-buy capacity, and market capitalization resolve independently.
+
+The aggregate response includes a per-market RPC report and preserves partial results. The `/stream` variant is NDJSON and emits market, pool, and field progress as it arrives. Creation time comes from direct market state, bounded account history, or observed cache state with explicit source and approximation fields; Mamba does not fabricate creation or activity time.
+
+```bash
+curl -sS \
+  -H "x-api-key: $MAMBA_API_KEY" \
+  "$MAMBA_API_BASE/mamba-search/EC89C9SJscnDsteimgg6cShCGBVzNvcey8wNEhm3oPy4"
+```
+
+See [Mamba Search](MAMBA_SEARCH.md) for the full response contract, concurrency model, completeness rules, and timeout controls.
 
 ### `GET /mints/{mint}/creator`
 

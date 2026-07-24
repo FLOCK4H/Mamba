@@ -1532,11 +1532,8 @@ impl RaydiumLaunchpad {
     pub async fn fetch_state(&self, pool: &Pubkey) -> anyhow::Result<RaydiumLaunchpadPoolState> {
         let account = self
             .sol
-            .rpc_client
-            .get_account_with_commitment(pool, CommitmentConfig::processed())
-            .await?
-            .value
-            .ok_or(anyhow::anyhow!("raydium launchpad pool account not found"))?;
+            .get_account_with_commitment_resilient(pool, CommitmentConfig::processed())
+            .await?;
         anyhow::ensure!(
             account.owner == RAYDIUM_LAUNCHPAD_ID || account.owner == RAYDIUM_LAUNCHPAD_DEVNET_ID,
             "raydium launchpad pool owner {} is not a supported launchpad program id",
@@ -1606,11 +1603,8 @@ impl RaydiumLaunchpad {
     ) -> anyhow::Result<(RaydiumLaunchpadPoolState, f64)> {
         let pool_account = self
             .sol
-            .rpc_client
-            .get_account_with_commitment(pool, CommitmentConfig::processed())
-            .await?
-            .value
-            .ok_or(anyhow::anyhow!("raydium launchpad pool account not found"))?;
+            .get_account_with_commitment_resilient(pool, CommitmentConfig::processed())
+            .await?;
         anyhow::ensure!(
             pool_account.owner == RAYDIUM_LAUNCHPAD_ID
                 || pool_account.owner == RAYDIUM_LAUNCHPAD_DEVNET_ID,
@@ -1625,13 +1619,11 @@ impl RaydiumLaunchpad {
 
         let global_acc = self
             .sol
-            .rpc_client
-            .get_account_with_commitment(&state.global_config, CommitmentConfig::processed())
-            .await?
-            .value
-            .ok_or(anyhow::anyhow!(
-                "raydium launchpad global config account not found"
-            ))?;
+            .get_account_with_commitment_resilient(
+                &state.global_config,
+                CommitmentConfig::processed(),
+            )
+            .await?;
         anyhow::ensure!(
             global_acc.owner == program_id,
             "raydium launchpad global config owner {} does not match program {}",

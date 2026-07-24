@@ -1922,240 +1922,294 @@ impl WsHandler {
             .await?;
         log!(cc::LIGHT_WHITE, "Subscribed to Raydium CLMM using WS");
 
+        {
+            let handler = self.clone();
+            tokio::spawn(async move {
+                if let Err(error) = handler.bootstrap_raydium_clmm_recent_activity().await {
+                    warn!("raydium_clmm bootstrap failed: {}", error);
+                }
+            });
+        }
+
         while let Some(msg) = rx.recv().await {
             let sig = msg.signature.clone();
             let events = RaydiumClmm::parse_logs(msg.logs.iter(), Some(&sig));
-            let mints = self.mints.clone();
-            let holder_balances = self.holder_balances.clone();
-            let holder_delta_cache = self.holder_delta_cache.clone();
-            let seen_mint_signatures = self.seen_mint_signatures.clone();
-            let sol_hook = self.sol_hook.clone();
-            let retries = self.token_info_retries.clone();
-            let squeezer = self.squeezer.clone();
+            if !events.iter().any(|event| {
+                matches!(
+                    event,
+                    RaydiumClmmEvent::PoolCreated(_) | RaydiumClmmEvent::Swap(_)
+                )
+            }) {
+                continue;
+            }
 
+            let handler = self.clone();
             self.try_spawn_observation(async move {
-                let clmm = RaydiumClmm::new(Arc::new(Keypair::new()), Arc::new(sol_hook.clone()));
-                let signature = Signature::from_str(&sig).ok();
+                handler
+                    .process_raydium_clmm_observation(sig, events, None)
+                    .await;
+            });
+        }
 
-                for event in events {
-                    match event {
-                        RaydiumClmmEvent::PoolCreated(Some(create)) => {
-                            let pool = Pubkey::new_from_array(create.pool_state.to_bytes());
-                            let mint_a = Pubkey::new_from_array(create.token_mint_0.to_bytes());
-                            let mint_b = Pubkey::new_from_array(create.token_mint_1.to_bytes());
-                            let token_mint = if mint_a == WSOL_MINT && mint_b != WSOL_MINT {
-                                mint_b
-                            } else if mint_b == WSOL_MINT && mint_a != WSOL_MINT {
-                                mint_a
-                            } else {
-                                continue;
-                            };
+        Ok(())
+    }
 
-                            let state = match squeezer.run_result(|| clmm.fetch_state(&pool)).await
-                            {
-                                Ok(state) => state,
-                                Err(_) => continue,
-                            };
-                            let price =
-                                RaydiumClmm::price_from_sqrt_price_x64(&state).unwrap_or_default();
-                            let token_info = WsHandler::fetch_token_info_with_limit(
-                                sol_hook.clone(),
-                                retries.clone(),
-                                squeezer.clone(),
+    async fn process_raydium_clmm_observation(
+        &self,
+        sig: String,
+        events: Vec<RaydiumClmmEvent>,
+        observed_unix_time: Option<f64>,
+    ) -> bool {
+        let observed_at = observed_unix_time.unwrap_or_else(timestamp_now);
+        let clmm = RaydiumClmm::new(Arc::new(Keypair::new()), Arc::new(self.sol_hook.clone()));
+        let signature = Signature::from_str(&sig).ok();
+        let mut inserted = false;
+
+        for event in events {
+            match event {
+                RaydiumClmmEvent::PoolCreated(Some(create)) => {
+                    let pool = Pubkey::new_from_array(create.pool_state.to_bytes());
+                    let mint_a = Pubkey::new_from_array(create.token_mint_0.to_bytes());
+                    let mint_b = Pubkey::new_from_array(create.token_mint_1.to_bytes());
+                    let token_mint = if mint_a == WSOL_MINT && mint_b != WSOL_MINT {
+                        mint_b
+                    } else if mint_b == WSOL_MINT && mint_a != WSOL_MINT {
+                        mint_a
+                    } else {
+                        continue;
+                    };
+
+                    let state = match self.squeezer.run_result(|| clmm.fetch_state(&pool)).await {
+                        Ok(state) => state,
+                        Err(_) => continue,
+                    };
+                    let price = RaydiumClmm::price_from_sqrt_price_x64(&state).unwrap_or_default();
+                    let token_info = WsHandler::fetch_token_info_with_limit(
+                        self.sol_hook.clone(),
+                        self.token_info_retries.clone(),
+                        self.squeezer.clone(),
+                        &token_mint,
+                    )
+                    .await
+                    .unwrap_or(TokenInfo {
+                        mint: Pubkey::default(),
+                        name: "".to_string(),
+                        symbol: "".to_string(),
+                        uri: "".to_string(),
+                        creator: None,
+                        authority: Pubkey::default(),
+                    });
+
+                    let creator = token_info.creator.unwrap_or(state.owner);
+                    let mut mint = Mint {
+                        mint: Address::from(token_mint.to_bytes()),
+                        bonding_curve: Address::from(pool.to_bytes()),
+                        price,
+                        highest_price: price,
+                        name: token_info.name,
+                        symbol: token_info.symbol,
+                        uri: token_info.uri,
+                        creator: Address::from(creator.to_bytes()),
+                        creator_sold: false,
+                        creator_token_amount: 0.0,
+                        buys: 0,
+                        sells: 0,
+                        tx_count: 0,
+                        volume: 0.0,
+                        liquidity: state.liquidity as f64,
+                        is_migrated: false,
+                        migration_event: None,
+                        holder_count: 0,
+                        created_time: observed_at,
+                        last_activity_time: observed_at,
+                    };
+                    WsHandler::register_tx_observation(
+                        &self.seen_mint_signatures,
+                        &mut mint,
+                        signature.as_ref(),
+                    );
+                    WsHandler::insert_mint_snapshot(
+                        &self.mints,
+                        Address::from(token_mint.to_bytes()),
+                        mint,
+                    );
+                    inserted = true;
+                }
+                RaydiumClmmEvent::Swap(Some(swap)) => {
+                    let pool = Pubkey::new_from_array(swap.pool_state.to_bytes());
+                    let state = match self.squeezer.run_result(|| clmm.fetch_state(&pool)).await {
+                        Ok(state) => state,
+                        Err(_) => continue,
+                    };
+                    let token_mint = if state.mint_a == WSOL_MINT && state.mint_b != WSOL_MINT {
+                        state.mint_b
+                    } else if state.mint_b == WSOL_MINT && state.mint_a != WSOL_MINT {
+                        state.mint_a
+                    } else {
+                        continue;
+                    };
+                    let existing_mint = self
+                        .mints
+                        .iter()
+                        .find(|(_, mint)| mint.bonding_curve == Address::from(pool.to_bytes()))
+                        .map(|(_, mint)| mint.clone());
+                    let mut mint = if let Some(mut cached) = existing_mint {
+                        if WsHandler::mint_metadata_incomplete(&cached)
+                            && let Some(token_info) = WsHandler::fetch_token_info_with_limit(
+                                self.sol_hook.clone(),
+                                self.token_info_retries.clone(),
+                                self.squeezer.clone(),
                                 &token_mint,
                             )
                             .await
-                            .unwrap_or(TokenInfo {
-                                mint: Pubkey::default(),
-                                name: "".to_string(),
-                                symbol: "".to_string(),
-                                uri: "".to_string(),
-                                creator: None,
-                                authority: Pubkey::default(),
-                            });
-
-                            let creator = token_info.creator.unwrap_or(state.owner);
-                            let mut mint = Mint {
-                                mint: Address::from(token_mint.to_bytes()),
-                                bonding_curve: Address::from(pool.to_bytes()),
-                                price,
-                                highest_price: price,
-                                name: token_info.name,
-                                symbol: token_info.symbol,
-                                uri: token_info.uri,
-                                creator: Address::from(creator.to_bytes()),
-                                creator_sold: false,
-                                creator_token_amount: 0.0,
-                                buys: 0,
-                                sells: 0,
-                                tx_count: 0,
-                                volume: 0.0,
-                                liquidity: state.liquidity as f64,
-                                is_migrated: false,
-                                migration_event: None,
-                                holder_count: 0,
-                                created_time: timestamp_now(),
-                                last_activity_time: timestamp_now(),
-                            };
-                            WsHandler::register_tx_observation(
-                                &seen_mint_signatures,
-                                &mut mint,
-                                signature.as_ref(),
-                            );
-                            WsHandler::insert_mint_snapshot(
-                                &mints,
-                                Address::from(token_mint.to_bytes()),
-                                mint,
-                            );
+                        {
+                            WsHandler::merge_token_info(&mut cached, &token_info);
                         }
-                        RaydiumClmmEvent::Swap(Some(swap)) => {
-                            let pool = Pubkey::new_from_array(swap.pool_state.to_bytes());
-                            let state = match squeezer.run_result(|| clmm.fetch_state(&pool)).await
-                            {
-                                Ok(state) => state,
-                                Err(_) => continue,
-                            };
-                            let token_mint =
-                                if state.mint_a == WSOL_MINT && state.mint_b != WSOL_MINT {
-                                    state.mint_b
-                                } else if state.mint_b == WSOL_MINT && state.mint_a != WSOL_MINT {
-                                    state.mint_a
-                                } else {
-                                    continue;
-                                };
-                            let existing_mint = {
-                                mints
-                                    .iter()
-                                    .find(|(_, m)| {
-                                        m.bonding_curve == Address::from(pool.to_bytes())
-                                    })
-                                    .map(|(_, m)| m.clone())
-                            };
-                            let mut mint = if let Some(mut m) = existing_mint {
-                                if WsHandler::mint_metadata_incomplete(&m)
-                                    && let Some(token_info) =
-                                        WsHandler::fetch_token_info_with_limit(
-                                            sol_hook.clone(),
-                                            retries.clone(),
-                                            squeezer.clone(),
-                                            &token_mint,
-                                        )
-                                        .await
-                                    && WsHandler::merge_token_info(&mut m, &token_info)
-                                {
-                                    WsHandler::insert_mint_snapshot(
-                                        &mints,
-                                        Address::from(token_mint.to_bytes()),
-                                        m.clone(),
-                                    );
-                                }
-                                m
-                            } else {
-                                let token_info = WsHandler::fetch_token_info_with_limit(
-                                    sol_hook.clone(),
-                                    retries.clone(),
-                                    squeezer.clone(),
-                                    &token_mint,
-                                )
-                                .await
-                                .unwrap_or(TokenInfo {
-                                    mint: Pubkey::default(),
-                                    name: "".to_string(),
-                                    symbol: "".to_string(),
-                                    uri: "".to_string(),
-                                    creator: None,
-                                    authority: Pubkey::default(),
-                                });
-                                let creator = token_info.creator.unwrap_or(state.owner);
-                                let mint = Mint {
-                                    mint: Address::from(token_mint.to_bytes()),
-                                    bonding_curve: Address::from(pool.to_bytes()),
-                                    price: 0.0,
-                                    highest_price: 0.0,
-                                    name: token_info.name,
-                                    symbol: token_info.symbol,
-                                    uri: token_info.uri,
-                                    creator: Address::from(creator.to_bytes()),
-                                    creator_sold: false,
-                                    creator_token_amount: 0.0,
-                                    buys: 0,
-                                    sells: 0,
-                                    tx_count: 0,
-                                    volume: 0.0,
-                                    liquidity: state.liquidity as f64,
-                                    is_migrated: false,
-                                    migration_event: None,
-                                    holder_count: 0,
-                                    created_time: Self::UNKNOWN_CREATED_TIME,
-                                    last_activity_time: timestamp_now(),
-                                };
-                                WsHandler::insert_mint_snapshot(
-                                    &mints,
-                                    Address::from(token_mint.to_bytes()),
-                                    mint.clone(),
-                                );
-                                mint
-                            };
-
-                            let price = RaydiumClmm::price_from_sqrt_price_x64(&state)
-                                .unwrap_or(mint.price);
-                            if price > mint.highest_price {
-                                mint.highest_price = price;
-                            }
-                            mint.price = price;
-                            mint.liquidity = state.liquidity as f64;
-
-                            let input_mint = if swap.zero_for_one {
-                                state.mint_a
-                            } else {
-                                state.mint_b
-                            };
-                            let sol_amount = if state.mint_a == WSOL_MINT {
-                                swap.amount_0 as f64 / 1e9
-                            } else {
-                                swap.amount_1 as f64 / 1e9
-                            };
-                            if input_mint == WSOL_MINT {
-                                mint.buys += 1;
-                                mint.volume += sol_amount;
-                            } else {
-                                mint.sells += 1;
-                                mint.volume += sol_amount;
-                            }
-
-                            if let Some(signature) = signature.as_ref() {
-                                let holder_deltas = WsHandler::infer_holder_deltas_from_signature(
-                                    &holder_delta_cache,
-                                    sol_hook.clone(),
-                                    squeezer.clone(),
-                                    signature,
-                                    &token_mint,
-                                )
-                                .await;
-                                if let Some(holder_count) = WsHandler::apply_holder_deltas(
-                                    &holder_balances,
-                                    &mint.mint,
-                                    &holder_deltas,
-                                ) {
-                                    mint.holder_count = holder_count;
-                                }
-                            }
-
-                            WsHandler::register_tx_observation(
-                                &seen_mint_signatures,
-                                &mut mint,
-                                signature.as_ref(),
-                            );
-                            WsHandler::insert_mint_snapshot(
-                                &mints,
-                                Address::from(token_mint.to_bytes()),
-                                mint,
-                            );
+                        cached
+                    } else {
+                        let token_info = WsHandler::fetch_token_info_with_limit(
+                            self.sol_hook.clone(),
+                            self.token_info_retries.clone(),
+                            self.squeezer.clone(),
+                            &token_mint,
+                        )
+                        .await
+                        .unwrap_or(TokenInfo {
+                            mint: Pubkey::default(),
+                            name: "".to_string(),
+                            symbol: "".to_string(),
+                            uri: "".to_string(),
+                            creator: None,
+                            authority: Pubkey::default(),
+                        });
+                        let creator = token_info.creator.unwrap_or(state.owner);
+                        Mint {
+                            mint: Address::from(token_mint.to_bytes()),
+                            bonding_curve: Address::from(pool.to_bytes()),
+                            price: 0.0,
+                            highest_price: 0.0,
+                            name: token_info.name,
+                            symbol: token_info.symbol,
+                            uri: token_info.uri,
+                            creator: Address::from(creator.to_bytes()),
+                            creator_sold: false,
+                            creator_token_amount: 0.0,
+                            buys: 0,
+                            sells: 0,
+                            tx_count: 0,
+                            volume: 0.0,
+                            liquidity: state.liquidity as f64,
+                            is_migrated: false,
+                            migration_event: None,
+                            holder_count: 0,
+                            created_time: Self::UNKNOWN_CREATED_TIME,
+                            last_activity_time: observed_at,
                         }
-                        _ => {}
+                    };
+
+                    let price =
+                        RaydiumClmm::price_from_sqrt_price_x64(&state).unwrap_or(mint.price);
+                    if price > mint.highest_price {
+                        mint.highest_price = price;
                     }
+                    mint.price = price;
+                    mint.liquidity = state.liquidity as f64;
+                    mint.last_activity_time = observed_at;
+
+                    let input_mint = if swap.zero_for_one {
+                        state.mint_a
+                    } else {
+                        state.mint_b
+                    };
+                    let sol_amount = if state.mint_a == WSOL_MINT {
+                        swap.amount_0 as f64 / 1e9
+                    } else {
+                        swap.amount_1 as f64 / 1e9
+                    };
+                    if input_mint == WSOL_MINT {
+                        mint.buys += 1;
+                        mint.volume += sol_amount;
+                    } else {
+                        mint.sells += 1;
+                        mint.volume += sol_amount;
+                    }
+
+                    if let Some(signature) = signature.as_ref() {
+                        let holder_deltas = WsHandler::infer_holder_deltas_from_signature(
+                            &self.holder_delta_cache,
+                            self.sol_hook.clone(),
+                            self.squeezer.clone(),
+                            signature,
+                            &token_mint,
+                        )
+                        .await;
+                        if let Some(holder_count) = WsHandler::apply_holder_deltas(
+                            &self.holder_balances,
+                            &mint.mint,
+                            &holder_deltas,
+                        ) {
+                            mint.holder_count = holder_count;
+                        }
+                    }
+
+                    WsHandler::register_tx_observation(
+                        &self.seen_mint_signatures,
+                        &mut mint,
+                        signature.as_ref(),
+                    );
+                    WsHandler::insert_mint_snapshot(
+                        &self.mints,
+                        Address::from(token_mint.to_bytes()),
+                        mint,
+                    );
+                    inserted = true;
                 }
-            });
+                _ => {}
+            }
+        }
+
+        inserted
+    }
+
+    async fn bootstrap_raydium_clmm_recent_activity(&self) -> anyhow::Result<()> {
+        let program_id = crate::core::cluster::raydium_clmm_program_id(self.sol_hook.cluster);
+        let observations = self
+            .collect_recent_program_activity(
+                "raydium_clmm",
+                &[program_id],
+                Self::LAUNCHPAD_BOOTSTRAP_SIGNATURE_LIMIT,
+                Self::LAUNCHPAD_BOOTSTRAP_FETCH_LIMIT,
+            )
+            .await?;
+
+        let mut processed = 0usize;
+        for (signature, raw_logs, observed_unix_time) in observations {
+            if processed >= Self::LAUNCHPAD_BOOTSTRAP_PROCESS_LIMIT {
+                break;
+            }
+            let events = RaydiumClmm::parse_logs(raw_logs.iter(), Some(&signature));
+            if !events.iter().any(|event| {
+                matches!(
+                    event,
+                    RaydiumClmmEvent::PoolCreated(_) | RaydiumClmmEvent::Swap(_)
+                )
+            }) {
+                continue;
+            }
+            if self
+                .process_raydium_clmm_observation(signature, events, observed_unix_time)
+                .await
+            {
+                processed += 1;
+            }
+        }
+
+        if processed > 0 {
+            log!(
+                cc::LIGHT_WHITE,
+                "Raydium CLMM bootstrap: processed {} recent transactions",
+                processed
+            );
         }
 
         Ok(())
@@ -3075,69 +3129,24 @@ impl WsHandler {
             format!("Program {} invoke", RAYDIUM_LAUNCHPAD_DEVNET_ID),
         ];
 
-        let mut merged: HashMap<String, RpcConfirmedTransactionStatusWithSignature> =
-            HashMap::new();
-        for program_id in program_ids {
-            match self
-                .sol_hook
-                .rpc_client
-                .get_signatures_for_address_with_config(
-                    &program_id,
-                    GetConfirmedSignaturesForAddress2Config {
-                        before: None,
-                        until: None,
-                        limit: Some(Self::LAUNCHPAD_BOOTSTRAP_SIGNATURE_LIMIT),
-                        commitment: Some(CommitmentConfig::confirmed()),
-                    },
-                )
-                .await
-            {
-                Ok(signatures) => {
-                    for entry in signatures {
-                        merged.entry(entry.signature.clone()).or_insert(entry);
-                    }
-                }
-                Err(error) => {
-                    warn!(
-                        "raydium_launchpad bootstrap: getSignaturesForAddress({}) failed: {}",
-                        program_id,
-                        SolHook::redact_url_queries_in_text(&error.to_string())
-                    );
-                }
-            }
-        }
-
-        let mut entries = merged.into_values().collect::<Vec<_>>();
-        entries.sort_by(|a, b| b.slot.cmp(&a.slot));
+        let observations = self
+            .collect_recent_program_activity(
+                "raydium_launchpad",
+                &program_ids,
+                Self::LAUNCHPAD_BOOTSTRAP_SIGNATURE_LIMIT,
+                Self::LAUNCHPAD_BOOTSTRAP_FETCH_LIMIT,
+            )
+            .await?;
 
         let mut fetched = 0usize;
         let mut processed = 0usize;
-        for entry in entries
-            .into_iter()
-            .take(Self::LAUNCHPAD_BOOTSTRAP_FETCH_LIMIT)
-        {
+        for (signature, raw_logs, observed_unix_time) in observations {
             if processed >= Self::LAUNCHPAD_BOOTSTRAP_PROCESS_LIMIT {
                 break;
             }
 
-            let signature = match Signature::from_str(&entry.signature) {
-                Ok(signature) => signature,
-                Err(_) => continue,
-            };
-
-            let tx = match self.sol_hook.get_transaction_parsed(&signature).await {
-                Ok(tx) => tx,
-                Err(_) => continue,
-            };
-
             fetched += 1;
-
-            let raw_logs = confirmed_transaction_logs(&tx);
-            if raw_logs.is_empty() {
-                continue;
-            }
-
-            let events = RaydiumLaunchpad::parse_logs(raw_logs.iter(), Some(&entry.signature));
+            let events = RaydiumLaunchpad::parse_logs(raw_logs.iter(), Some(&signature));
             let has_invoke = raw_logs.iter().any(|log| {
                 launchpad_invoke_prefixes
                     .iter()
@@ -3156,10 +3165,10 @@ impl WsHandler {
             let launchpad_migration_target_from_logs =
                 WsHandler::launchpad_migration_target_from_logs(&raw_logs);
             self.process_raydium_launchpad_observation(
-                entry.signature,
+                signature,
                 events,
                 launchpad_migration_target_from_logs,
-                entry.block_time.map(|value| value as f64),
+                observed_unix_time,
             )
             .await;
             processed += 1;
@@ -4133,8 +4142,7 @@ impl WsHandler {
         for program_id in program_ids {
             match self
                 .sol_hook
-                .rpc_client
-                .get_signatures_for_address_with_config(
+                .get_signatures_for_address_with_config_resilient(
                     program_id,
                     GetConfirmedSignaturesForAddress2Config {
                         before: None,

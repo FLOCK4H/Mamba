@@ -1086,25 +1086,19 @@ impl MeteoraDbc {
     pub async fn fetch_state(&self, pool: &Pubkey) -> anyhow::Result<MeteoraDbcPoolState> {
         let pool_data = self
             .sol
-            .rpc_client
-            .get_account_with_commitment(pool, CommitmentConfig::processed())
+            .get_account_with_commitment_resilient(pool, CommitmentConfig::processed())
             .await?
-            .value
-            .ok_or(anyhow::anyhow!("meteora dbc pool account not found"))?
             .data;
 
         let virtual_pool = Self::decode_virtual_pool_account_data(&pool_data)?;
 
         let config_data = self
             .sol
-            .rpc_client
-            .get_account_with_commitment(&virtual_pool.config, CommitmentConfig::processed())
+            .get_account_with_commitment_resilient(
+                &virtual_pool.config,
+                CommitmentConfig::processed(),
+            )
             .await?
-            .value
-            .ok_or(anyhow::anyhow!(
-                "meteora dbc config account not found: {}",
-                virtual_pool.config
-            ))?
             .data;
 
         let config = Self::decode_pool_config_account_data(&config_data)?;

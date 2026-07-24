@@ -31,9 +31,19 @@ The local API exposes these markets through:
 | `POST /ws/subscribe` | Start a market websocket subscription |
 | `GET /mints` | Query the live mint cache |
 | `GET /mints/{mint}/route` | Resolve a swap route for a mint |
+| `GET /mamba-search/{mint}` | Discover and inspect every WSOL pool across all markets and configured RPCs |
 | `POST /swap` | Plan or execute a swap against any market |
 
 The TUI and MCP bridge both sit on top of the same routing and swap surface.
+
+## Low-activity cache hydration
+
+Raydium Launchpad, Raydium CLMM, and Meteora DBC subscriptions replay a bounded set of recent program
+transactions into the same adapter observation path used for live websocket events. Signature discovery,
+parsed transactions, and pool/config account reads all use the resilient HTTP RPC pool. This keeps a newly
+started in-memory cache useful when the primary provider is throttled or the next live event is delayed.
+Only decoded pool-create or swap observations insert rows; subscription state by itself never fabricates a
+mint snapshot.
 
 ## Code paths
 
@@ -41,7 +51,8 @@ The definitive code-level checks for market support:
 
 | File | What to look for |
 |------|-----------------|
-| `src/dex/swaps.rs` | `Market` enum includes all 10. `DEFAULT_MARKET_PRIORITY` includes all 10. Buy and sell dispatch handle all 10. |
+| `src/dex/swaps.rs` | `Market` enum includes all 10. `DEFAULT_MARKET_PRIORITY` includes all 10. Buy, sell, and all-pool discovery dispatch handle all 10. |
+| `src/mamba_search.rs` | Fans discovery across all markets and configured RPCs, then races RPCs while inspecting every pool. |
 | `src/api/mod.rs` | `/ws/subscribe` accepts all 10. `/swap` resolves routes and executes against the selected market. |
 | `src/dex/operator_live_tests.rs` | Contains a `first_ws_mint_buy_sell_confirm` live test for each of the 10 markets. |
 

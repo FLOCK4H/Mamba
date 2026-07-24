@@ -166,6 +166,8 @@ pub struct MintCreatorRoute {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RouteLiquiditySnapshot {
+    pub mint_balance_raw: u64,
+    pub mint_decimals: u8,
     pub wsol_liquidity_raw: u64,
     pub max_safe_buy_sol_raw: u64,
 }
@@ -933,6 +935,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(base_raw, token_decimals, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: base_raw,
+                        mint_decimals: token_decimals,
                         wsol_liquidity_raw: quote_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -946,6 +950,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(quote_raw, token_decimals, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: quote_raw,
+                        mint_decimals: token_decimals,
                         wsol_liquidity_raw: base_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -966,6 +972,8 @@ impl Swaps {
                     price,
                 );
                 RouteLiquiditySnapshot {
+                    mint_balance_raw: state.real_token_reserves,
+                    mint_decimals: token_decimals,
                     wsol_liquidity_raw: state.real_sol_reserves,
                     max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                 }
@@ -993,6 +1001,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(base_net, token_decimals, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: base_net,
+                        mint_decimals: token_decimals,
                         wsol_liquidity_raw: quote_net,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1006,6 +1016,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(quote_net, token_decimals, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: quote_net,
+                        mint_decimals: token_decimals,
                         wsol_liquidity_raw: base_net,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1035,6 +1047,8 @@ impl Swaps {
                     price,
                 );
                 RouteLiquiditySnapshot {
+                    mint_balance_raw: remaining_base_raw,
+                    mint_decimals: state.base_decimals,
                     wsol_liquidity_raw: state.real_quote,
                     max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                 }
@@ -1059,6 +1073,8 @@ impl Swaps {
                         price,
                     );
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: token_raw,
+                        mint_decimals: state.mint_decimals_a,
                         wsol_liquidity_raw: wsol_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1079,6 +1095,8 @@ impl Swaps {
                         price,
                     );
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: token_raw,
+                        mint_decimals: state.mint_decimals_b,
                         wsol_liquidity_raw: wsol_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1123,6 +1141,8 @@ impl Swaps {
                         price,
                     );
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: vault_0_net,
+                        mint_decimals: state.mint_0_decimals,
                         wsol_liquidity_raw: vault_1_net,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1138,6 +1158,8 @@ impl Swaps {
                         price,
                     );
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: vault_1_net,
+                        mint_decimals: state.mint_1_decimals,
                         wsol_liquidity_raw: vault_0_net,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1175,6 +1197,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(reserve_x_raw, decimals_x, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: reserve_x_raw,
+                        mint_decimals: decimals_x,
                         wsol_liquidity_raw: reserve_y_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1184,6 +1208,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(reserve_y_raw, decimals_y, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: reserve_y_raw,
+                        mint_decimals: decimals_y,
                         wsol_liquidity_raw: reserve_x_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1242,6 +1268,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(reserve_a_raw, decimals_a, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: reserve_a_raw,
+                        mint_decimals: decimals_a,
                         wsol_liquidity_raw: reserve_b_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1251,6 +1279,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(reserve_b_raw, decimals_b, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: reserve_b_raw,
+                        mint_decimals: decimals_b,
                         wsol_liquidity_raw: reserve_a_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1287,6 +1317,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(reserve_a_raw, decimals_a, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: reserve_a_raw,
+                        mint_decimals: decimals_a,
                         wsol_liquidity_raw: reserve_b_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1296,6 +1328,8 @@ impl Swaps {
                     let max_buy =
                         Self::sol_capacity_from_token_reserve_raw(reserve_b_raw, decimals_b, price);
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: reserve_b_raw,
+                        mint_decimals: decimals_b,
                         wsol_liquidity_raw: reserve_a_raw,
                         max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                     }
@@ -1315,12 +1349,15 @@ impl Swaps {
                     mint
                 );
                 let (_, price) = self.meteora_dbc.fetch_price(pool).await?;
+                let token_decimals = self.sol_hook.get_token_decimals(mint).await?;
                 let max_buy = Self::sol_capacity_from_token_reserve_raw(
                     state.virtual_pool.base_reserve,
-                    self.sol_hook.get_token_decimals(mint).await?,
+                    token_decimals,
                     price,
                 );
                 RouteLiquiditySnapshot {
+                    mint_balance_raw: state.virtual_pool.base_reserve,
+                    mint_decimals: token_decimals,
                     wsol_liquidity_raw: state.virtual_pool.quote_reserve,
                     max_safe_buy_sol_raw: Self::apply_buy_capacity_safety_margin(max_buy),
                 }
@@ -1389,6 +1426,8 @@ impl Swaps {
                         error
                     );
                     RouteLiquiditySnapshot {
+                        mint_balance_raw: 0,
+                        mint_decimals: 0,
                         wsol_liquidity_raw: if timed_out {
                             0
                         } else {
@@ -1481,6 +1520,71 @@ impl Swaps {
         }
     }
 
+    /// Discover every WSOL-quoted pool for one mint on one supported market.
+    ///
+    /// Unlike route selection, this does not rank or discard valid pools. It is
+    /// the market-level primitive used by `mamba_search` to fan discovery out
+    /// across markets and configured RPC endpoints.
+    pub async fn find_pools_for_market(
+        &self,
+        market: Market,
+        mint: &Pubkey,
+        quote_mint: Option<&Pubkey>,
+    ) -> anyhow::Result<Vec<Pubkey>> {
+        let mut pools = match market {
+            Market::PumpSwap => self.pump_swap.find_pools_by_mint(mint, quote_mint).await?,
+            Market::PumpFun => self
+                .pump_fun
+                .find_pool_by_mint_with_min_liquidity(mint, quote_mint, 0)
+                .await?
+                .into_iter()
+                .collect(),
+            Market::RaydiumAmmV4 => {
+                self.raydium_amm_v4
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+            Market::RaydiumLaunchpad => {
+                self.raydium_launchpad
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+            Market::RaydiumClmm => {
+                self.raydium_clmm
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+            Market::RaydiumCpmm => {
+                self.raydium_cpmm
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+            Market::MeteoraDlmm => {
+                self.meteora_dlmm
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+            Market::MeteoraDammV1 => {
+                self.meteora_damm_v1
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+            Market::MeteoraDammV2 => {
+                self.meteora_damm_v2
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+            Market::MeteoraDbc => {
+                self.meteora_dbc
+                    .find_pools_by_mint(mint, quote_mint)
+                    .await?
+            }
+        };
+        pools.sort_unstable();
+        pools.dedup();
+        Ok(pools)
+    }
+
     async fn resolve_market_fallback_creator(
         &self,
         market: Market,
@@ -1525,7 +1629,12 @@ impl Swaps {
                 .map(|state| state.creator)
                 .ok(),
             Market::MeteoraDammV1 => None,
-            Market::MeteoraDammV2 => None,
+            Market::MeteoraDammV2 => self
+                .meteora_damm_v2
+                .fetch_state(pool)
+                .await
+                .map(|state| state.creator)
+                .ok(),
             Market::MeteoraDbc => self
                 .meteora_dbc
                 .fetch_state(pool)
@@ -2047,6 +2156,45 @@ impl Swaps {
             price
         );
         Ok(price)
+    }
+
+    /// Resolve a pool creation time directly from protocol state when the
+    /// market stores one. Markets without an account-level timestamp return
+    /// `None`; callers may then use transaction history as a conservative
+    /// fallback instead of presenting a fabricated time.
+    pub async fn get_pool_created_time_for_market_pool(
+        &self,
+        market: Market,
+        pool: &Pubkey,
+    ) -> anyhow::Result<Option<f64>> {
+        let timestamp = match market {
+            Market::RaydiumAmmV4 => {
+                let state = self.raydium_amm_v4.fetch_state(pool).await?;
+                (state.pool_open_time > 0).then_some(state.pool_open_time as f64)
+            }
+            Market::RaydiumCpmm => {
+                let state = self.raydium_cpmm.fetch_state(pool).await?;
+                (state.open_time > 0).then_some(state.open_time as f64)
+            }
+            Market::MeteoraDammV2 => {
+                let state = self.meteora_damm_v2.fetch_state(pool).await?;
+                if state.activation_point == 0 {
+                    None
+                } else if state.activation_type == 1 {
+                    Some(state.activation_point as f64)
+                } else {
+                    self.sol_hook
+                        .rpc_client
+                        .get_block_time(state.activation_point)
+                        .await
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .map(|value| value as f64)
+                }
+            }
+            _ => None,
+        };
+        Ok(timestamp)
     }
 
     pub async fn measure_route_liquidity_for_market_pool(
@@ -3115,6 +3263,8 @@ mod tests {
         assert!(Swaps::route_is_low_lq(
             Market::PumpSwap,
             &RouteLiquiditySnapshot {
+                mint_balance_raw: 0,
+                mint_decimals: 0,
                 wsol_liquidity_raw: 9_999_999_999,
                 max_safe_buy_sol_raw: 0,
             }
@@ -3122,6 +3272,8 @@ mod tests {
         assert!(!Swaps::route_is_low_lq(
             Market::PumpSwap,
             &RouteLiquiditySnapshot {
+                mint_balance_raw: 0,
+                mint_decimals: 0,
                 wsol_liquidity_raw: Swaps::low_lq_wsol_threshold_raw(),
                 max_safe_buy_sol_raw: 0,
             }
@@ -3131,6 +3283,8 @@ mod tests {
     #[test]
     fn test_route_is_low_lq_skips_exempt_markets() {
         let liquidity = RouteLiquiditySnapshot {
+            mint_balance_raw: 0,
+            mint_decimals: 0,
             wsol_liquidity_raw: 1,
             max_safe_buy_sol_raw: 0,
         };

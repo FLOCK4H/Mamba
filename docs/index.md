@@ -2,8 +2,8 @@
 
 <div class="home-hero">
   <img class="home-hero-brand" src="images/mamba_text_1280_640.png" alt="Mamba">
-  <h1>The definitive Solana Rust market kit.</h1>
-  <p>Stream markets, build swaps, launch tokens, and run wallet operations across 10 DEXs. Mamba provides the building blocks as a local API, an interactive terminal app, and an agent-ready MCP bridge. All signing stays strictly on your machine.</p>
+  <h1>A Solana adapter for traders and developers.</h1>
+  <p>Read markets, inspect pools, build swaps, create tokens, and run wallet operations across 10 protocols. Mamba provides these capabilities through a local API, terminal app, and MCP bridge. Mamba charges no software fee, and signing stays on your machine.</p>
   <div class="hero-actions">
     <a class="md-button md-button--primary" href="quickstart/">Start Building</a>
     <a class="md-button" href="MAMBA_API/">API Reference</a>
@@ -25,7 +25,7 @@
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
     </div>
     <strong>Terminal Interface</strong>
-    <p>A full-featured TUI for degens and operators. Trade, manage wallets, clean up dust, and capture deterministic snapshots for UI evidence.</p>
+    <p>A terminal interface for traders and operators. Review trades, manage wallets, clean up dust, and capture deterministic snapshots for UI evidence.</p>
   </a>
   <a href="MAMBA_MCP/" class="feature-card">
     <div class="feature-icon">
@@ -40,6 +40,13 @@
     </div>
     <strong>10 DEX Adapters</strong>
     <p>Deep integration with Raydium, Meteora, Pump.fun, and PumpSwap. Shared routing logic keeps market adapters isolated and safe.</p>
+  </a>
+  <a href="MAMBA_SEARCH/" class="feature-card">
+    <div class="feature-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+    </div>
+    <strong>Mamba Search</strong>
+    <p>Inspect every WSOL pool for a mint across all supported markets, with concurrent RPC discovery and exact pool reserves.</p>
   </a>
 </div>
 
@@ -63,6 +70,7 @@ A generated repository inventory page is sourced from the tracked tree. If it is
 | Surface | Status |
 |---|---|
 | Wallet cleaner | Available in both the local API and the TUI main menu. Preview and build flows classify SPL Token and Token-2022 accounts into unwrap, burn-and-close, close-empty, or skip. |
+| Mamba Search | Available at `GET /mamba-search/{mint}` with all-market discovery, multi-RPC fan-out, and partial-result reporting. |
 | Documentation site | GitHub Pages MkDocs Material site with a custom visual layer and a repo inventory. |
 
 ## Entry points
@@ -72,6 +80,7 @@ A generated repository inventory page is sourced from the tracked tree. If it is
 | First-time setup | [Quickstart](quickstart.md) |
 | Runtime shape and crate map | [Architecture](architecture.md) |
 | HTTP routes and builders | [Local API](MAMBA_API.md) |
+| All-market mint pool discovery | [Mamba Search](MAMBA_SEARCH.md) |
 | Agent integration | [MCP guide](MAMBA_MCP.md) |
 | Client-specific MCP setup | [MCP client setup](MCP_CLIENT_SETUP.md) |
 | Terminal app operation | [CLI and TUI](MAMBA_CLI.md) |

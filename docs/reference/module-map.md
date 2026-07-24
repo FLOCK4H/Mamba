@@ -36,6 +36,12 @@
 |------|---------|
 | `src/mcp/mod.rs` | Stdio MCP server with all tool definitions wrapping the HTTP API |
 
+## Search module
+
+| Path | Purpose |
+|------|---------|
+| `src/mamba_search.rs` | Read-only, concurrent discovery and inspection of every WSOL pool for a mint across all markets and configured RPCs |
+
 ## Market adapters
 
 | Path | Purpose |

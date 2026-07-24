@@ -19,12 +19,13 @@ use {
         },
     },
     crate::handlers::ws::{MigrationConfidence, MigrationEvent, Mint, WsHandler},
+    crate::mamba_search::{MambaSearch, MambaSearchResponse},
     crate::swqos::{SWQoSettings, SwqosProvider},
     crate::warn,
     anyhow::Context,
     axum::{
         Json, Router,
-        body::Body,
+        body::{Body, Bytes},
         extract::{
             Path, Query, State,
             connect_info::ConnectInfo,
@@ -48,6 +49,7 @@ use {
     std::{
         cmp::Ordering,
         collections::{HashMap, HashSet},
+        convert::Infallible,
         net::{IpAddr, SocketAddr},
         path::PathBuf,
         str::FromStr,
@@ -58,6 +60,7 @@ use {
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     },
     tokio::{runtime::Handle, sync::Mutex},
+    tokio_stream::{StreamExt as TokioStreamExt, wrappers::ReceiverStream},
 };
 
 use chrono::{DateTime, Utc};
@@ -253,6 +256,8 @@ async fn run_from_env_inner(market_runtime: Option<Handle>) -> anyhow::Result<()
         .route("/mints/{mint}/metadata", get(get_mint_metadata))
         .route("/mints/metadata-batch", post(post_mint_metadata_batch))
         .route("/mints/{mint}/route", get(get_mint_route))
+        .route("/mamba-search/{mint}", get(get_mamba_search))
+        .route("/mamba-search/{mint}/stream", get(get_mamba_search_stream))
         .route("/mints/{mint}/activity", get(activity::get_mint_activity))
         .route("/ws/subscribe", post(post_ws_subscribe))
         .route("/ws/unsubscribe", post(post_ws_unsubscribe))
@@ -1166,6 +1171,11 @@ async fn get_docs() -> Json<DocsResponse> {
             },
             DocsEndpoint {
                 method: "GET",
+                path: "/mamba-search/{mint}",
+                description: "Discover and inspect every WSOL pool for a mint across every supported market and configured RPC",
+            },
+            DocsEndpoint {
+                method: "GET",
                 path: "/mints/{mint}/route",
                 description: "Resolve market/pool/price route for mint",
             },
@@ -1592,6 +1602,146 @@ async fn get_mint_route(
         liquidity: RouteLiquidityResponse::from(selection.liquidity),
         liquidity_warning: selection.warning,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct MambaSearchQuery {
+    quote_mint: Option<String>,
+}
+
+async fn mamba_search_market_observations(
+    state: &ApiState,
+    mint: &Pubkey,
+) -> HashMap<Market, (Option<f64>, Option<f64>)> {
+    let mint_literal = mint.to_string();
+    let handlers = collect_active_market_handlers(state, None).await;
+    handlers
+        .into_iter()
+        .filter_map(|(market, handler)| {
+            handler.mints.iter().find_map(|(_, snapshot)| {
+                (snapshot.mint.to_string() == mint_literal).then_some((
+                    market,
+                    (
+                        (snapshot.created_time > 0.0).then_some(snapshot.created_time),
+                        (snapshot.last_activity_time > 0.0).then_some(snapshot.last_activity_time),
+                    ),
+                ))
+            })
+        })
+        .collect()
+}
+
+fn build_mamba_search(
+    state: &ApiState,
+    observations: HashMap<Market, (Option<f64>, Option<f64>)>,
+) -> Result<MambaSearch, ApiError> {
+    // Each Swaps instance is bound to one configured RPC. MambaSearch starts
+    // all of them concurrently and races each enrichment field independently.
+    let rpc_swaps = state
+        .rpc_clients
+        .iter()
+        .cloned()
+        .map(|rpc| {
+            Arc::new(build_swaps_for_rpc_with_signer(
+                rpc,
+                state.cluster,
+                Arc::new(Keypair::new()),
+                None,
+            ))
+        })
+        .collect::<Vec<_>>();
+    MambaSearch::new(rpc_swaps)
+        .map(|search| search.with_market_observations(observations))
+        .map_err(|error| ApiError::internal(format!("mamba_search unavailable: {error}")))
+}
+
+async fn get_mamba_search(
+    State(state): State<Arc<ApiState>>,
+    Path(mint): Path<String>,
+    Query(query): Query<MambaSearchQuery>,
+) -> Result<Json<MambaSearchResponse>, ApiError> {
+    let mint_pubkey =
+        Pubkey::from_str(mint.trim()).map_err(|_| ApiError::bad_request("invalid mint pubkey"))?;
+    let quote_mint = non_empty_optional(query.quote_mint);
+    let observations = mamba_search_market_observations(state.as_ref(), &mint_pubkey).await;
+    let search = build_mamba_search(state.as_ref(), observations)?;
+    let mut response = search
+        .search(&mint, quote_mint.as_deref())
+        .await
+        .map_err(|error| {
+            let message = SolHook::redacted_error(&error);
+            if message.contains("invalid") || message.contains("requires the WSOL") {
+                ApiError::bad_request(message)
+            } else {
+                ApiError::internal(format!("mamba_search failed: {message}"))
+            }
+        })?;
+
+    // Websocket cache timestamps and metadata are observation-derived, not
+    // pool-account fields. Attach them when this API process has a live view.
+    let handlers = collect_active_market_handlers(state.as_ref(), None).await;
+    for (market, handler) in handlers {
+        let snapshot = handler.mints.iter().find_map(|(_, snapshot)| {
+            (snapshot.mint.to_string() == mint_pubkey.to_string()).then_some(snapshot)
+        });
+        let Some(snapshot) = snapshot else {
+            continue;
+        };
+
+        if response.mint.name.is_none() && !snapshot.name.trim().is_empty() {
+            response.mint.name = Some(snapshot.name.trim().to_string());
+        }
+        if response.mint.symbol.is_none() && !snapshot.symbol.trim().is_empty() {
+            response.mint.symbol = Some(snapshot.symbol.trim().to_string());
+        }
+        if response.mint.uri.is_none() && !snapshot.uri.trim().is_empty() {
+            response.mint.uri = Some(snapshot.uri.trim().to_string());
+        }
+        for pool in response
+            .pools
+            .iter_mut()
+            .filter(|pool| pool.market == market.as_str())
+        {
+            pool.created_time = (snapshot.created_time > 0.0).then_some(snapshot.created_time);
+            pool.last_activity_time =
+                (snapshot.last_activity_time > 0.0).then_some(snapshot.last_activity_time);
+        }
+    }
+
+    Ok(Json(response))
+}
+
+async fn get_mamba_search_stream(
+    State(state): State<Arc<ApiState>>,
+    Path(mint): Path<String>,
+    Query(query): Query<MambaSearchQuery>,
+) -> Result<Response, ApiError> {
+    let mint_pubkey =
+        Pubkey::from_str(mint.trim()).map_err(|_| ApiError::bad_request("invalid mint pubkey"))?;
+    let quote_mint = non_empty_optional(query.quote_mint);
+    if let Some(quote_mint) = quote_mint.as_deref() {
+        Pubkey::from_str(quote_mint)
+            .map_err(|_| ApiError::bad_request("invalid quote mint pubkey"))?;
+    }
+
+    let observations = mamba_search_market_observations(state.as_ref(), &mint_pubkey).await;
+    let receiver = build_mamba_search(state.as_ref(), observations)?
+        .search_stream(mint_pubkey.to_string(), quote_mint);
+    let stream = ReceiverStream::new(receiver).map(|event| {
+        let mut encoded = serde_json::to_vec(&event).unwrap_or_else(|_| {
+            br#"{"type":"error","message":"search event encoding failed"}"#.to_vec()
+        });
+        encoded.push(b'\n');
+        Ok::<Bytes, Infallible>(Bytes::from(encoded))
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/x-ndjson; charset=utf-8")
+        .header("cache-control", "no-store, no-transform")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from_stream(stream))
+        .map_err(|error| ApiError::internal(format!("mamba_search stream failed: {error}")))
 }
 
 #[derive(Serialize)]

@@ -24,6 +24,7 @@ use {
     solana_address::Address,
     solana_client::{
         nonblocking::rpc_client::RpcClient,
+        rpc_client::GetConfirmedSignaturesForAddress2Config,
         rpc_config::{RpcProgramAccountsConfig, RpcSendTransactionConfig, RpcTransactionConfig},
         rpc_response::SlotInfo,
     },
@@ -35,7 +36,10 @@ use {
     solana_pubsub_client::nonblocking::pubsub_client::PubsubClient,
     solana_rpc_client_types::{
         config::{RpcAccountInfoConfig, RpcTransactionLogsConfig, RpcTransactionLogsFilter},
-        response::{Response as RpcResponse, RpcLogsResponse, RpcSimulateTransactionResult},
+        response::{
+            Response as RpcResponse, RpcConfirmedTransactionStatusWithSignature, RpcLogsResponse,
+            RpcSimulateTransactionResult,
+        },
     },
     solana_signature::Signature,
     solana_signer::Signer,
@@ -832,6 +836,31 @@ impl SolHook {
         .ok_or_else(|| anyhow::anyhow!("account {} not found", address))
     }
 
+    pub(crate) async fn get_signatures_for_address_with_config_resilient(
+        &self,
+        address: &Pubkey,
+        config: GetConfirmedSignaturesForAddress2Config,
+    ) -> anyhow::Result<Vec<RpcConfirmedTransactionStatusWithSignature>> {
+        let before = config.before;
+        let until = config.until;
+        let limit = config.limit;
+        let commitment = config.commitment;
+        self.run_rpc_attempts("getSignaturesForAddress", |rpc| {
+            let config = GetConfirmedSignaturesForAddress2Config {
+                before,
+                until,
+                limit,
+                commitment,
+            };
+            async move {
+                Ok(rpc
+                    .get_signatures_for_address_with_config(address, config)
+                    .await?)
+            }
+        })
+        .await
+    }
+
     pub(crate) async fn get_latest_blockhash_with_commitment_resilient(
         &self,
         commitment: CommitmentConfig,
@@ -1003,6 +1032,36 @@ impl SolHook {
                 acc.owner
             );
         }
+    }
+
+    /// Return the mint's current total supply in display units.
+    ///
+    /// The account is read through the same resilient RPC path used by other
+    /// read-only token helpers and supports both SPL Token and Token-2022 mints.
+    pub async fn get_token_supply_ui(&self, mint: &Pubkey) -> anyhow::Result<f64> {
+        let acc = self
+            .get_account_with_commitment_resilient(mint, CommitmentConfig::processed())
+            .await
+            .map_err(|e| anyhow::anyhow!("Error getting mint account: {:?}", e))?;
+        let (supply, decimals) = if acc.owner == TOKEN_PROGRAM_ID {
+            let mint_state = SplMint::unpack(&acc.data)
+                .map_err(|e| anyhow::anyhow!("not an SPL Token mint: {e}"))?;
+            (mint_state.supply, mint_state.decimals)
+        } else if acc.owner == TOKEN_2022_PROGRAM_ID {
+            use spl_token_2022::extension::StateWithExtensions;
+
+            let mint_state = StateWithExtensions::<SplMint2022>::unpack(&acc.data)
+                .map_err(|e| anyhow::anyhow!("not a Token-2022 mint: {e}"))?;
+            (mint_state.base.supply, mint_state.base.decimals)
+        } else {
+            anyhow::bail!(
+                "account {} not owned by SPL Token program(s): {}",
+                mint,
+                acc.owner
+            );
+        };
+
+        Ok(supply as f64 / 10_f64.powi(decimals as i32))
     }
 
     pub async fn get_token_metadata(&self, mint: &Pubkey) -> anyhow::Result<(MplMetadata, Pubkey)> {

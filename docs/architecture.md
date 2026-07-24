@@ -18,6 +18,10 @@ flowchart LR
     A[.env config] --> B[mamba_api]
     B --> C[Axum routes + auth]
     C --> D[Websocket subscriptions]
+    C --> N[Mamba Search]
+    C --> P[Pool-scoped mint activity]
+    N --> O[All markets x all HTTP RPCs]
+    P --> Q[Helius transactions + DAS holders]
     D --> E[In-memory mint cache]
     E --> F[Read endpoints]
     E --> G[Swap / route planning]
@@ -34,6 +38,8 @@ flowchart LR
 1. `mamba_api` loads environment and starts authenticated routes.
 2. Websocket subscriptions populate runtime market caches through `src/handlers/ws.rs`.
 3. Read endpoints resolve mints, routes, creators, and metadata from the live cache. When `MAMBA_API_STORE_MODE=true`, Postgres-backed overlays add historical depth.
+   Mint activity is a separate provider-backed read: an optional pool public key filters the transaction
+   account list before event decoding or signer-balance inference and is echoed in the response contract.
 4. Builder endpoints return unsigned transactions with optional simulation results.
 5. `mamba_mcp` forwards the same API surface to MCP clients without exposing private keys.
 6. `mamba` consumes builders, signs locally when required, and can render deterministic snapshots for UI evidence.
@@ -46,6 +52,7 @@ flowchart LR
 | MCP | `src/mcp/` | Stdio MCP server with tool definitions wrapping the HTTP API |
 | Core | `src/core/` | Shared Solana utilities, create/pool/wallet builders, signer helpers, cluster handling |
 | DEX | `src/dex/` | Market-specific integrations, route selection, swap orchestration |
+| Mamba Search | `src/mamba_search.rs` | Progressive all-market pool discovery and field-level multi-RPC inspection |
 | Handlers | `src/handlers/` | Websocket ingestion and live mint cache plumbing |
 | SWQoS | `src/swqos/` | Provider-specific transport and relay settings (Jito, Helius, Blox, NextBlock, Temporal, ZeroSlot) |
 | Transfers | `src/transfers/` | SOL, WSOL, and transfer helpers |

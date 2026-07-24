@@ -9,12 +9,12 @@
 </p>
 
 <p align="center">
-  Local Solana DEX toolkit in Rust. Live market feeds, route discovery, swaps, token launches, and pool management across 10 markets.<br>
-  Ships as a local API, an MCP server, and a terminal app. All signing stays on your machine.
+  Public-source Solana adapter in Rust for traders and developers. Read markets, discover routes, build swaps, create tokens, and manage pools across 10 protocols.<br>
+  Mamba charges no software fee. It ships as a local API, an MCP server, and a terminal app, with signing kept on your machine.
 </p>
 
 <p align="center">
-  <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/MAMBA_API.md">API</a> · <a href="docs/MAMBA_MCP.md">MCP</a> · <a href="docs/MAMBA_CLI.md">CLI</a> · <a href="docs/markets.md">Markets</a> · <a href="docs/MCP_CLIENT_SETUP.md">MCP Client Setup</a>
+  <a href="docs/quickstart.md">Quickstart</a> · <a href="docs/MAMBA_API.md">API</a> · <a href="docs/MAMBA_SEARCH.md">Search</a> · <a href="docs/MAMBA_MCP.md">MCP</a> · <a href="docs/MAMBA_CLI.md">CLI</a> · <a href="docs/markets.md">Markets</a>
 </p>
 
 ---
@@ -73,6 +73,14 @@ curl -sS -H "x-api-key: $MAMBA_API_KEY" -H "content-type: application/json" \
 # read the mint feed
 curl -sS -H "x-api-key: $MAMBA_API_KEY" \
   "http://127.0.0.1:8787/mamba-api/v1/mints?markets=pump_fun,pump_swap&limit=20"
+
+# inspect every WSOL pool for one mint across all markets and configured RPCs
+curl -sS -H "x-api-key: $MAMBA_API_KEY" \
+  "http://127.0.0.1:8787/mamba-api/v1/mamba-search/<MINT_ADDRESS>"
+
+# stream markets, discovered pools, and independently resolved fields as NDJSON
+curl -sS -N -H "x-api-key: $MAMBA_API_KEY" \
+  "http://127.0.0.1:8787/mamba-api/v1/mamba-search/<MINT_ADDRESS>/stream"
 ```
 
 **Trade from the terminal?** The TUI gives you live monitoring, trading, token creation, pool management, wallet ops, and holder lookups in one screen:
@@ -126,6 +134,7 @@ src/
   core/         Shared types, config, wallet management
   gate/         Auth and rate limiting
   handlers/     Request handlers
+  mamba_search.rs  Concurrent all-market, all-RPC mint pool discovery
   transfers/    SOL and SPL token transfer logic
   swqos/        Stake-weighted QoS for transaction sending
   compute_budget/  Priority fee computation
@@ -136,6 +145,7 @@ src/
 
 - [Quickstart](docs/quickstart.md)
 - [API reference](docs/MAMBA_API.md)
+- [Mamba Search](docs/MAMBA_SEARCH.md)
 - [MCP server](docs/MAMBA_MCP.md)
 - [MCP client setup](docs/MCP_CLIENT_SETUP.md)
 - [CLI/TUI](docs/MAMBA_CLI.md)
@@ -143,3 +153,7 @@ src/
 - [Market breakdown](docs/markets.md)
 - [Architecture](docs/architecture.md)
 - [Wallet cleaner](docs/features/wallet-cleaner.md)
+
+## License status
+
+Mamba's source is publicly readable and the software does not impose a Mamba usage fee. This checkout does not currently contain a `LICENSE` file, so it does not yet grant open-source reuse or redistribution rights. The maintainer must select and publish a license before describing those rights more broadly.

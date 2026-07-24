@@ -1,5 +1,5 @@
 site_name: Mamba Docs
-site_description: Solana Rust market kit, local authenticated API, CLI/TUI, and degen-ready workflows
+site_description: Public-source Solana adapter, authenticated local API, CLI/TUI, and developer workflows
 site_dir: docs-site
 docs_dir: docs
 
@@ -68,6 +68,7 @@ nav:
       - Quickstart: quickstart.md
       - Architecture: architecture.md
       - Markets: markets.md
+      - Mamba Search: MAMBA_SEARCH.md
       - Repository Workflow: repository-workflow.md
   - Apps:
       - Local API: MAMBA_API.md

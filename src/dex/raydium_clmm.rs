@@ -586,11 +586,8 @@ impl RaydiumClmm {
     pub async fn fetch_state(&self, pool: &Pubkey) -> anyhow::Result<ClmmPoolState> {
         let data = self
             .sol
-            .rpc_client
-            .get_account_with_commitment(pool, CommitmentConfig::processed())
+            .get_account_with_commitment_resilient(pool, CommitmentConfig::processed())
             .await?
-            .value
-            .ok_or(anyhow::anyhow!("raydium clmm pool account not found"))?
             .data;
         Self::decode_pool_state_account_data(&data)
     }

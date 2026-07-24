@@ -13,7 +13,6 @@ use {
     serde_json::{Value, json},
     solana_program::pubkey::Pubkey,
     std::{
-        cmp::Ordering,
         collections::{HashMap, HashSet},
         str::FromStr,
         sync::{Arc, OnceLock},
@@ -45,6 +44,7 @@ pub(super) struct MintTrade {
     sol_amount: Option<f64>,
     price_sol: Option<f64>,
     market_cap_sol: Option<f64>,
+    price_authoritative: bool,
     timestamp: i64,
     holding_pct: Option<f64>,
     source: &'static str,
@@ -63,6 +63,8 @@ pub(super) struct MintHolder {
 pub(super) struct MintActivityResponse {
     mint: String,
     market: Option<String>,
+    pool: Option<String>,
+    trades_scoped_to_pool: bool,
     fetched_at: i64,
     trades: Vec<MintTrade>,
     holders: Vec<MintHolder>,
@@ -170,7 +172,7 @@ pub(super) async fn get_mint_activity(
 
     let (holders, trades_result) = tokio::join!(
         fetch_holder_index(&state, &mint, pool, holder_limit),
-        fetch_recent_trades(&state, &mint, trade_limit)
+        fetch_recent_trades(&state, &mint, pool, trade_limit)
     );
 
     let mut warnings = Vec::new();
@@ -206,6 +208,8 @@ pub(super) async fn get_mint_activity(
     let response = MintActivityResponse {
         mint: mint.clone(),
         market: market.map(ToOwned::to_owned),
+        pool: pool.map(ToOwned::to_owned),
+        trades_scoped_to_pool: pool.is_some(),
         fetched_at: unix_timestamp(),
         trade_count: trades.len(),
         trades,
@@ -375,6 +379,7 @@ async fn fetch_das_holder_index(
 async fn fetch_recent_trades(
     state: &ApiState,
     mint: &str,
+    pool: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<(Vec<MintTrade>, bool, &'static str)> {
     let urls = helius_rpc_urls(state);
@@ -404,6 +409,9 @@ async fn fetch_recent_trades(
     let mut seen = HashSet::new();
 
     for entry in data {
+        if pool.is_some_and(|pool| !transaction_has_account(&entry, pool)) {
+            continue;
+        }
         let Some(signature) = entry
             .pointer("/transaction/signatures/0")
             .and_then(Value::as_str)
@@ -448,6 +456,7 @@ async fn fetch_recent_trades(
                 sol_amount: Some(sol_amount),
                 price_sol: trade_price_sol(token_amount, Some(sol_amount)),
                 market_cap_sol: None,
+                price_authoritative: true,
                 timestamp: positive_timestamp(event.timestamp, fallback_timestamp),
                 holding_pct: None,
                 source: "pump_fun_event",
@@ -471,6 +480,7 @@ async fn fetch_recent_trades(
                                 sol_amount: Some(sol_amount),
                                 price_sol: trade_price_sol(token_amount, Some(sol_amount)),
                                 market_cap_sol: None,
+                                price_authoritative: true,
                                 timestamp: positive_timestamp(event.timestamp, fallback_timestamp),
                                 holding_pct: None,
                                 source: "pump_swap_event",
@@ -491,6 +501,7 @@ async fn fetch_recent_trades(
                                 sol_amount: Some(sol_amount),
                                 price_sol: trade_price_sol(token_amount, Some(sol_amount)),
                                 market_cap_sol: None,
+                                price_authoritative: true,
                                 timestamp: positive_timestamp(event.timestamp, fallback_timestamp),
                                 holding_pct: None,
                                 source: "pump_swap_event",
@@ -519,6 +530,21 @@ async fn fetch_recent_trades(
     Ok((trades, true, "helius_rpc"))
 }
 
+fn transaction_has_account(entry: &Value, expected: &str) -> bool {
+    entry
+        .pointer("/transaction/message/accountKeys")
+        .and_then(Value::as_array)
+        .is_some_and(|keys| {
+            keys.iter().any(|key| match key {
+                Value::String(value) => value == expected,
+                Value::Object(value) => {
+                    value.get("pubkey").and_then(Value::as_str) == Some(expected)
+                }
+                _ => false,
+            })
+        })
+}
+
 fn infer_trade_from_balances(
     entry: &Value,
     mint: &str,
@@ -541,28 +567,11 @@ fn infer_trade_from_balances(
     let mut after = HashMap::<String, f64>::new();
     collect_token_balances(entry.pointer("/meta/preTokenBalances"), mint, &mut before);
     collect_token_balances(entry.pointer("/meta/postTokenBalances"), mint, &mut after);
-    let owners = before
-        .keys()
-        .chain(after.keys())
-        .cloned()
-        .collect::<HashSet<_>>();
-    let (owner, delta) = owners
-        .into_iter()
-        .map(|owner| {
-            let delta = after.get(&owner).copied().unwrap_or_default()
-                - before.get(&owner).copied().unwrap_or_default();
-            (owner, delta)
-        })
-        .max_by(|left, right| {
-            left.1
-                .abs()
-                .partial_cmp(&right.1.abs())
-                .unwrap_or(Ordering::Equal)
-        })?;
+    let delta = after.get(&signer).copied().unwrap_or_default()
+        - before.get(&signer).copied().unwrap_or_default();
     if delta.abs() <= f64::EPSILON {
         return None;
     }
-    let signer = if owner.is_empty() { signer } else { owner };
     let token_amount = delta.abs();
     let sol_amount = signer_sol_delta(entry, account_keys, &signer)
         .map(f64::abs)
@@ -573,8 +582,9 @@ fn infer_trade_from_balances(
         signer,
         token_amount,
         sol_amount,
-        price_sol: trade_price_sol(token_amount, sol_amount),
+        price_sol: None,
         market_cap_sol: None,
+        price_authoritative: false,
         timestamp,
         holding_pct: None,
         source: "token_balance_delta",
@@ -733,7 +743,10 @@ fn unix_timestamp() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{trade_market_cap_sol, trade_price_sol};
+    use super::{
+        infer_trade_from_balances, trade_market_cap_sol, trade_price_sol, transaction_has_account,
+    };
+    use serde_json::json;
 
     #[test]
     fn derives_finite_trade_price_and_market_cap() {
@@ -750,5 +763,74 @@ mod tests {
         assert_eq!(trade_price_sol(0.0, Some(0.1)), None);
         assert_eq!(trade_price_sol(100.0, Some(f64::NAN)), None);
         assert_eq!(trade_market_cap_sol(Some(0.1), Some(0.0)), None);
+    }
+
+    #[test]
+    fn scopes_activity_to_the_requested_pool_account() {
+        let transaction = json!({
+            "transaction": {
+                "message": {
+                    "accountKeys": [
+                        { "pubkey": "Signer111", "signer": true },
+                        "Pool111"
+                    ]
+                }
+            }
+        });
+
+        assert!(transaction_has_account(&transaction, "Pool111"));
+        assert!(!transaction_has_account(&transaction, "OtherPool111"));
+    }
+
+    #[test]
+    fn balance_fallback_uses_the_signer_instead_of_the_pool_owner() {
+        let mint = "Mint111";
+        let transaction = json!({
+            "transaction": {
+                "message": {
+                    "accountKeys": [
+                        { "pubkey": "Signer111", "signer": true },
+                        { "pubkey": "Pool111", "signer": false }
+                    ]
+                }
+            },
+            "meta": {
+                "preBalances": [2_000_000_000_u64, 10_000_000_000_u64],
+                "postBalances": [1_900_000_000_u64, 10_100_000_000_u64],
+                "preTokenBalances": [
+                    {
+                        "mint": mint,
+                        "owner": "Signer111",
+                        "uiTokenAmount": { "uiAmountString": "10" }
+                    },
+                    {
+                        "mint": mint,
+                        "owner": "Pool111",
+                        "uiTokenAmount": { "uiAmountString": "900" }
+                    }
+                ],
+                "postTokenBalances": [
+                    {
+                        "mint": mint,
+                        "owner": "Signer111",
+                        "uiTokenAmount": { "uiAmountString": "20" }
+                    },
+                    {
+                        "mint": mint,
+                        "owner": "Pool111",
+                        "uiTokenAmount": { "uiAmountString": "800" }
+                    }
+                ]
+            }
+        });
+
+        let trade =
+            infer_trade_from_balances(&transaction, mint, "signature", 42).expect("signer trade");
+        assert_eq!(trade.signer, "Signer111");
+        assert_eq!(trade.side, "buy");
+        assert!((trade.token_amount - 10.0).abs() < f64::EPSILON);
+        assert_eq!(trade.sol_amount, Some(0.1));
+        assert_eq!(trade.price_sol, None);
+        assert!(!trade.price_authoritative);
     }
 }

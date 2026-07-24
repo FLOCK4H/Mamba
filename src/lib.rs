@@ -26,6 +26,7 @@ pub mod core;
 pub mod dex;
 pub mod gate;
 pub mod handlers;
+pub mod mamba_search;
 pub mod mcp;
 pub mod swqos;
 pub mod transfers;
